@@ -1,0 +1,8 @@
+﻿<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DeCakes.Api/DeCakes.Api.csproj" />
+    <Project Path="src/DeCakes.Application/DeCakes.Application.csproj" />
+    <Project Path="src/DeCakes.Domain/DeCakes.Domain.csproj" />
+    <Project Path="src/DeCakes.Infrastructure/DeCakes.Infrastructure.csproj" />
+  </Folder>
+</Solution>
