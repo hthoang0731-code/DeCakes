@@ -113,6 +113,14 @@ public static class AuthenticationSetup
     // Lỗi database được để nổi lên (500), không coi là đăng xuất.
     private static async Task ValidatePrincipalAsync(CookieValidatePrincipalContext context)
     {
+        // Endpoint đánh dấu [SkipSessionValidation] (chỉ health): bỏ qua cookie, coi request là ẩn danh.
+        // Không truy vấn database và không xóa cookie.
+        if (context.HttpContext.GetEndpoint()?.Metadata.GetMetadata<SkipSessionValidationAttribute>() is not null)
+        {
+            context.RejectPrincipal();
+            return;
+        }
+
         var principal = context.Principal;
         var roleClaim = principal?.FindFirstValue(ClaimTypes.Role);
         if (!long.TryParse(principal?.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) || roleClaim is null)

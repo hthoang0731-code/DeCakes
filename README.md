@@ -19,7 +19,8 @@ src/
   DeCakes.Api/             ASP.NET Core Web API (Controllers), cấu hình, xử lý lỗi HTTP
 tests/
   DeCakes.Application.Tests/  Kiểm thử service (fake store, fake hasher)
-  DeCakes.Api.Tests/          Kiểm thử API qua TestServer HTTPS, store trong bộ nhớ (xem tests/README.md)
+  DeCakes.Api.Tests/          Kiểm thử API qua TestServer HTTPS và Kestrel HTTPS, store trong bộ nhớ
+  DeCakes.Infrastructure.Tests/  Chốt bảo vệ + store MySQL thật trên MySQL 8.4 kiểm thử riêng (xem tests/README.md)
 database/                  Script SQL đã kiểm thử (xem database/README.md)
 ```
 
@@ -136,8 +137,8 @@ Quy trình gọi từ frontend (cùng origin, HTTPS, gửi kèm cookie):
 Hành vi chính:
 
 - Cookie `__Host-decakes.auth`: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, không có `Domain`. Là cookie phiên của trình duyệt (không remember-me). Ticket hết hạn tuyệt đối sau 2 giờ, không gia hạn (sliding).
-- Claims chỉ gồm user id và role, lấy từ server. Mỗi request có cookie, server đọc lại user: nếu user bị xóa, bị `disabled` hoặc đổi role, cookie bị từ chối và xóa.
-- Mọi đăng nhập thất bại (không có user, chưa có/hỏng hash, sai mật khẩu, user `disabled`) trả cùng một 401. Vẫn chạy một lần xác minh hash giả khi không có user hoặc hash.
+- Claims chỉ gồm user id và role, lấy từ server. Mỗi request có cookie, server đọc lại user: nếu user bị xóa, bị `disabled` hoặc đổi role, cookie bị từ chối và xóa. Ngoại lệ duy nhất là `GET /api/health` (`[SkipSessionValidation]`): cookie bị bỏ qua, request được coi là ẩn danh, không truy vấn database và không xóa cookie, nên health vẫn trả 200 khi database lỗi.
+- Mọi đăng nhập thất bại (không có user, chưa có/hỏng hash, sai mật khẩu, user `disabled`) trả cùng một 401. Khi không có user, hash NULL, không phải base64 hoặc sai cấu trúc V2/V3, vẫn chạy một lần xác minh trên hash giả; hash đúng cấu trúc được xác minh bằng `PasswordHasher` chuẩn của Microsoft.
 - Email được trim, chuẩn hóa Unicode NFC và chữ thường; so sánh khi tra cứu theo collation hiện có của cột. Mật khẩu không bị trim, dài 12–128 ký tự.
 - Trùng email dựa vào UNIQUE `uq_users_email` (kể cả đăng ký đồng thời) → 409.
 - Khi `PasswordHasher` báo cần rehash, hash mới được ghi có điều kiện (chỉ nếu hash cũ chưa đổi).
@@ -151,13 +152,15 @@ Giới hạn hiện tại:
 - Không thu hồi từng phiên ở server: cookie đã cấp còn hợp lệ đến khi hết 2 giờ, trừ khi user bị `disabled`, bị xóa hoặc đổi role. Đăng xuất chỉ xóa cookie ở trình duyệt.
 - Không có endpoint tạo tài khoản `bakery` hay `admin`.
 - Khóa Data Protection (dùng để mã hóa cookie) đang theo mặc định của máy. Khi chạy nhiều instance hoặc container cần cấu hình nơi lưu khóa dùng chung.
-- Mỗi request có cookie truy vấn bảng `users` một lần để kiểm tra trạng thái.
+- Mỗi request có cookie (trừ health) truy vấn bảng `users` một lần để kiểm tra trạng thái.
 
 ## Trạng thái xác minh — 15/10/2026
 
-- SDK 10.0.401; restore và build thành công, 0 cảnh báo, 0 lỗi. `dotnet test`: 79 kiểm thử đạt (35 service, 44 API và hasher).
-- Kiểm thử API chạy trên TestServer với scheme HTTPS, store user trong bộ nhớ và `PasswordHasher` thật; không kết nối database.
-- Kestrel HTTPS thật (Development, chứng chỉ dev được xác minh bằng phần public của nó): health 200, OpenAPI 200, `/api/auth/me` 401, cookie CSRF có `secure; samesite=strict; httponly; path=/`, login thiếu CSRF 400.
-- Trên Aiven, chỉ chạy truy vấn đọc: login với email không tồn tại trả 401 (câu SELECT theo email chạy được trên schema thật); `FindByIdAsync(0)` và `FindByEmailAsync` với email không tồn tại trả null.
-- **Chưa kiểm thử ghi thực tế**: INSERT đăng ký, UPDATE rehash và ánh xạ lỗi trùng email (MySQL 1062) chưa chạy trên database nào. Cần database kiểm thử riêng.
-- Kết nối qua `IMySqlConnectionFactory` với `decakes_app` và `VerifyFull` đã được xác minh trực tiếp từ secret (`SELECT 1`, `decakes_db`, `decakes_app@%`).
+- SDK 10.0.401; restore và build thành công, 0 cảnh báo, 0 lỗi.
+- `dotnet test` (không có MySQL kiểm thử): 112 đạt, 0 lỗi, 10 bỏ qua.
+  - Fake/in-memory: 35 service, 55 API (TestServer HTTPS, Kestrel HTTPS thật, adapter hasher).
+  - Chốt bảo vệ kiểm thử MySQL: 22 đạt (không cần MySQL).
+  - MySQL thật: 10 ca bị bỏ qua khi không đặt `DECAKES_TEST_MYSQL_ADMIN` (xem `tests/README.md`).
+- Luồng cookie trên Kestrel HTTPS thật với store trong bộ nhớ: đăng ký → đăng nhập → CSRF mới → `/me` → đăng xuất → `/me` 401. Client chỉ tin chứng chỉ phát triển làm root và vẫn kiểm tra hostname.
+- Trên Aiven, chỉ chạy truy vấn đọc ở bước trước: SELECT theo email và theo id với khóa không tồn tại; kết nối `decakes_app` + `VerifyFull` xác minh trực tiếp từ secret.
+- 16/10/2026: 10/10 ca `MySqlUserAccountStoreTests` đạt trên MySQL Community Server 8.4.11 (ZIP chính thức, chạy tạm trên `127.0.0.1`, cổng ngẫu nhiên, X Plugin tắt, không cài service). Đã kiểm chứng INSERT customer, đọc lại, trùng email và 12 lần đăng ký đồng thời (lỗi 1062), collation `utf8mb4_0900_ai_ci`, rehash có điều kiện và phân biệt hoa thường, UTC, tài khoản không có quyền DELETE. Persistence chưa được chạy trên Aiven (cố ý).

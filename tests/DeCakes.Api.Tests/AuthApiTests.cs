@@ -492,6 +492,44 @@ public class AuthApiTests
         }
     }
 
+    [Fact]
+    public async Task Health_ignores_session_when_database_fails_but_other_endpoints_still_validate()
+    {
+        var (app, client, _) = await LoggedInAsync();
+        using (app)
+        using (client)
+        {
+            app.Store.Fail = true;
+
+            var health = await client.GetAsync("/api/health");
+            Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+            Assert.Empty(client.LastSetCookies);
+
+            var me = await client.GetAsync("/api/auth/me");
+            Assert.Equal(HttpStatusCode.InternalServerError, me.StatusCode);
+            Assert.DoesNotContain("SIMULATED", await me.Content.ReadAsStringAsync());
+            Assert.Null(client.SetCookieFor(AuthCookie));
+            Assert.True(client.Cookies.ContainsKey(AuthCookie));
+        }
+    }
+
+    [Fact]
+    public async Task Health_does_not_clear_cookie_of_disabled_user()
+    {
+        var (app, client, id) = await LoggedInAsync();
+        using (app)
+        using (client)
+        {
+            app.Store.Update(id, a => a with { Status = UserStatuses.Disabled });
+
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/health")).StatusCode);
+            Assert.Empty(client.LastSetCookies);
+
+            // Endpoint khác vẫn kiểm tra trạng thái user.
+            Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/auth/me")).StatusCode);
+        }
+    }
+
     // ---------------- Endpoint sẵn có ----------------
 
     [Fact]
