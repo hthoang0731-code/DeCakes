@@ -357,7 +357,7 @@ Trạng thái: `pending_confirmation → confirmed → ready → picked_up`; `pe
 - `INSERT, UPDATE` trên `users`, `bakeries`, `bakery_members`, `cakes`, `design_requests`.
 - `INSERT` trên `media_assets` (bất biến).
 - `UPDATE (status, decline_reason, responded_at, updated_at)` trên `request_bakeries`.
-- `quotes`: không có quyền ghi; chỉ qua procedure.
+- `quotes`: đọc được (SELECT) nhờ quyền đọc toàn database, nhưng không có INSERT/UPDATE/DELETE trực tiếp; mọi thay đổi chỉ qua procedure.
 - `orders`: chỉ `UPDATE (status, picked_up_at, cancelled_at, updated_at)`.
 
 Procedure mặc định chạy `SQL SECURITY DEFINER` (không khai báo trong script, là mặc định của MySQL), nên chúng ghi được vào `quotes` và `orders` dù tài khoản gọi không có quyền.

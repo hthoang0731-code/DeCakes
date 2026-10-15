@@ -1,12 +1,19 @@
-# Kiểm thử (dự kiến)
+# Kiểm thử
 
-Chưa tạo project kiểm thử trong bước tạo khung. Khi bắt đầu triển khai nghiệp vụ, thêm theo nhóm:
+Chạy: `dotnet test` tại thư mục repository. Không cần và không dùng database.
 
-| Project dự kiến | Phạm vi |
+| Project | Phạm vi |
 | --- | --- |
-| `DeCakes.Domain.Tests` | Unit test quy tắc nghiệp vụ (trạng thái yêu cầu, báo giá, đơn). Không phụ thuộc hạ tầng. |
-| `DeCakes.Application.Tests` | Unit test service, dùng giả lập (mock/fake) cho interface. |
-| `DeCakes.Api.Tests` | Test tích hợp endpoint bằng `WebApplicationFactory` (mã trạng thái HTTP, định dạng lỗi). |
-| `DeCakes.Infrastructure.Tests` | Test gọi stored procedure trên database kiểm thử riêng, không dùng database dữ liệu thật. |
+| `DeCakes.Application.Tests` | Unit test `AccountService` với store và hasher giả: chuẩn hóa email, kiểm tra độ dài, mật khẩu không trim, trùng email, các nhánh đăng nhập thất bại, rehash. |
+| `DeCakes.Api.Tests` | Kiểm thử API qua `WebApplicationFactory` (TestServer, scheme HTTPS), store user trong bộ nhớ và `PasswordHasher` thật: CSRF, cookie flags và hạn 2 giờ, `/me`, logout, user bị disabled/xóa/đổi role, 401/403, rate limit 429, lỗi database được che. Có controller chỉ dành cho kiểm thử (`PolicyProbeController`, nạp qua ApplicationPart) để thử policy. |
+
+Môi trường kiểm thử API là `Testing`, nên không nạp user-secrets. Data Protection dùng khóa tạm trong bộ nhớ, thời gian của cookie dùng `FakeTimeProvider`.
+
+Dự kiến bổ sung:
+
+| Project | Phạm vi |
+| --- | --- |
+| `DeCakes.Domain.Tests` | Quy tắc nghiệp vụ (trạng thái yêu cầu, báo giá, đơn) khi có. |
+| `DeCakes.Infrastructure.Tests` | SQL thật của store và gọi stored procedure, **chỉ trên database kiểm thử riêng**, không dùng Aiven hiện có. Gồm INSERT đăng ký, UPDATE rehash, lỗi trùng email (1062), OUT parameter và SQLSTATE 45000. |
 
 Chuỗi kết nối cho test tích hợp lấy từ user-secrets hoặc biến môi trường, không đưa vào repository.

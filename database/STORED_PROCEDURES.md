@@ -8,7 +8,7 @@ Nguồn: `install/02_procedures.sql` (viết tắt **P**, kèm số dòng). Tài
 
 ## Tóm tắt
 
-| # | Procedure | Loại | Tự mở transaction? | Gọi ngoài transaction EF Core? | Tham số OUT |
+| # | Procedure | Loại | Tự mở transaction? | Gọi trên connection không có transaction ứng dụng? | Tham số OUT |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `sp_guard_active_customer` | guard | Không | Không áp dụng (không gọi trực tiếp) | không |
 | 2 | `sp_guard_active_bakery_member` | guard | Không | Không áp dụng | không |
@@ -22,14 +22,14 @@ Nguồn: `install/02_procedures.sql` (viết tắt **P**, kèm số dòng). Tài
 | 10 | `sp_accept_quote` | nghiệp vụ | **Có** | **Bắt buộc** | `p_order_id` |
 | 11 | `sp_bakery_decide_order` | nghiệp vụ | **Có** | **Bắt buộc** | không |
 
-Nhóm tự quản lý transaction: 6 procedure nghiệp vụ (số 6-11). Lý do bắt buộc gọi ngoài transaction EF Core: lệnh `START TRANSACTION` trong procedure sẽ ngầm `COMMIT` transaction đang mở (ghi chú P dòng 22-24). Nhóm guard không mở transaction và chỉ được gọi từ bên trong procedure nghiệp vụ, backend không nên gọi trực tiếp.
+Nhóm tự quản lý transaction: 6 procedure nghiệp vụ (số 6-11). Lý do bắt buộc gọi trên connection không có transaction của ứng dụng đang mở: lệnh `START TRANSACTION` trong procedure sẽ ngầm `COMMIT` transaction đang mở (ghi chú P dòng 22-24). Nhóm guard không mở transaction và chỉ được gọi từ bên trong procedure nghiệp vụ, backend không nên gọi trực tiếp.
 
 ## Quy ước chung của mọi procedure nghiệp vụ
 
 Từ P dòng 11-51 và cấu trúc từng procedure:
 
 - **Xác thực khác phân quyền.** `p_actor_user_id` / `p_customer_id` do backend lấy từ phiên đăng nhập đã xác thực. Procedure chỉ kiểm tra quyền (trạng thái, vai trò, thành viên tiệm, chủ yêu cầu), không xác thực.
-- **Lỗi nghiệp vụ**: `SIGNAL SQLSTATE '45000'` với `MESSAGE_TEXT` là mã ngắn (ví dụ `QUOTE_EXPIRED`). Không đặt `MYSQL_ERRNO` nên số lỗi MySQL là mặc định của `SIGNAL` (1644) **[cần xác minh trên provider đã chọn]**.
+- **Lỗi nghiệp vụ**: `SIGNAL SQLSTATE '45000'` với `MESSAGE_TEXT` là mã ngắn (ví dụ `QUOTE_EXPIRED`). Không đặt `MYSQL_ERRNO` nên số lỗi MySQL là mặc định của `SIGNAL` (1644) **[cần xác minh trên MySqlConnector]**.
 - **Transaction và rollback.** Cả 6 procedure nghiệp vụ có `DECLARE EXIT HANDLER FOR SQLEXCEPTION BEGIN ROLLBACK; RESIGNAL; END`. Mọi lỗi, kể cả lỗi hệ thống MySQL như vi phạm CHECK hoặc UNIQUE, deadlock, lock wait timeout, đều rollback toàn bộ rồi ném lại nguyên lỗi gốc. Các lỗi không phải nghiệp vụ này **không** mang SQLSTATE 45000.
 - **Thứ tự khóa thống nhất** để tránh deadlock: `design_requests → request_bakeries → quotes → orders`, sau đó khóa chia sẻ (`FOR SHARE`) `users, bakeries, bakery_members, media_assets` (qua guard).
 - **Thời gian hiện tại** `v_now` lấy sau khi giữ đủ khóa: `SYSDATE(3) - INTERVAL TIMESTAMPDIFF(MICROSECOND, UTC_TIMESTAMP(3), NOW(3)) MICROSECOND`, tức giờ UTC thực, không phụ thuộc `time_zone` của session. Yêu cầu: gọi trực tiếp bằng `CALL`, không từ trigger hay function (P dòng 33-50).
@@ -206,9 +206,8 @@ Các việc sau backend phải làm bằng câu lệnh trực tiếp (cần quy�
 
 ## Chung: lưu ý khi gọi từ backend
 
-1. Gọi ngoài transaction EF Core; mỗi lần gọi là một transaction độc lập. Không đặt các lần gọi vào cùng một `TransactionScope` hoặc `BeginTransaction` của EF.
-2. Bắt lỗi nghiệp vụ qua `MySqlException` với SQLSTATE `45000` và lấy mã từ `Message`. Lỗi khác (CHECK, UNIQUE, deadlock, lock wait timeout) đến với SQLSTATE khác. **[cần xác minh cách provider đã chọn (Oracle `MySql.EntityFrameworkCore`/`MySql.Data`) hiển thị SqlState và Message trước khi viết mã ánh xạ lỗi]**.
-3. OUT parameter cần khai báo `ParameterDirection.Output`; cách làm cụ thể với `Database.ExecuteSqlRaw` hoặc ADO.NET trực tiếp **[cần xác minh bằng thử nghiệm]**.
-4. Nên gọi bằng ADO.NET (`DbCommand` với `CommandType.StoredProcedure`) từ Infrastructure thay vì map procedure vào EF **[đề xuất, cần chốt]**.
-5. Id người thực hiện lấy từ claim đã xác thực, không từ body request.
+1. Backend dùng ADO.NET với MySqlConnector (xem `README.md`). Mỗi lần gọi mở một connection từ `IMySqlConnectionFactory` và không có transaction ứng dụng đang mở trên connection đó. Mỗi lần gọi là một transaction độc lập do procedure tự quản lý.
+2. Bắt lỗi nghiệp vụ qua `MySqlException` với SQLSTATE `45000` và lấy mã từ `Message`. Lỗi khác (CHECK, UNIQUE, deadlock, lock wait timeout) đến với SQLSTATE khác. **[cần xác minh trên MySqlConnector: `SqlState`, `Number` và `Message` của lỗi `SIGNAL` trước khi viết mã ánh xạ lỗi]**.
+3. Gọi bằng `MySqlCommand` với `CommandType.StoredProcedure`, parameter đúng thứ tự và kiểu, OUT parameter khai báo `ParameterDirection.Output`. **[cần xác minh bằng thử nghiệm trên database kiểm thử riêng, không trên Aiven hiện có]**.
+4. SQL luôn dùng parameter. Kiểu `MySqlConnector` chỉ nằm trong Infrastructure; Application và Domain không tham chiếu.5. Id người thực hiện lấy từ claim đã xác thực, không từ body request.
 6. Chuyển mã lỗi nghiệp vụ sang HTTP (404, 403, 409, 422) ở Api; bảng ánh xạ cần được nhóm chốt riêng.
