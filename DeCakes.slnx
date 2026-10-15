@@ -1,8 +1,13 @@
-﻿<Solution>
+<Solution>
   <Folder Name="/src/">
     <Project Path="src/DeCakes.Api/DeCakes.Api.csproj" />
     <Project Path="src/DeCakes.Application/DeCakes.Application.csproj" />
     <Project Path="src/DeCakes.Domain/DeCakes.Domain.csproj" />
     <Project Path="src/DeCakes.Infrastructure/DeCakes.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DeCakes.Api.Tests/DeCakes.Api.Tests.csproj" />
+    <Project Path="tests/DeCakes.Application.Tests/DeCakes.Application.Tests.csproj" />
+    <Project Path="tests/DeCakes.Infrastructure.Tests/DeCakes.Infrastructure.Tests.csproj" />
   </Folder>
 </Solution>
