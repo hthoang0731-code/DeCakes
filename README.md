@@ -60,7 +60,7 @@ dotnet build
 dotnet run --project src/DeCakes.Api
 ```
 
-Chạy các lệnh trên tại thư mục repository `D:\DeCakes\BE`, không phải `D:\DeCakes` hoặc thư mục home. Mở thư mục `BE` trong VS Code.
+Chạy các lệnh trên tại thư mục gốc của checkout có file `DeCakes.slnx`; mở chính thư mục đó trong VS Code. Đường dẫn tùy máy, không phụ thuộc `D:\DeCakes\BE`.
 
 Nếu môi trường hạn chế tiến trình khiến restore/build báo thất bại với 0 lỗi, chạy tuần tự:
 
@@ -79,7 +79,7 @@ dotnet run --project src/DeCakes.Api --launch-profile https
 
 Cổng 7215 (HTTPS); request HTTP tới 5011 được chuyển hướng sang HTTPS. Cần chứng chỉ phát triển được tin cậy: `dotnet dev-certs https --trust` (Windows sẽ hỏi xác nhận).
 
-Kiểm thử: `dotnet test` (không kết nối database).
+Kiểm thử: `dotnet test`. Application/API dùng fake hoặc store trong bộ nhớ; kiểm thử persistence MySQL thật chỉ được bật khi có `DECAKES_TEST_MYSQL_ADMIN` và sẽ tạo/xóa database cùng user tạm trên MySQL kiểm thử riêng. Để chạy kiểm tra không kết nối database, dùng [lệnh có lọc và cô lập biến môi trường](docs/DEVELOPMENT_WORKFLOW.md#validation-commands). Xem [tests/README.md](tests/README.md) trước khi bật kiểm thử MySQL; không dùng Aiven.
 
 ## Cấu hình bí mật
 
@@ -153,6 +153,23 @@ Giới hạn hiện tại:
 - Không có endpoint tạo tài khoản `bakery` hay `admin`.
 - Khóa Data Protection (dùng để mã hóa cookie) đang theo mặc định của máy. Khi chạy nhiều instance hoặc container cần cấu hình nơi lưu khóa dùng chung.
 - Mỗi request có cookie (trừ health) truy vấn bảng `users` một lần để kiểm tra trạng thái.
+
+## Catalog: xem tiệm và mẫu bánh
+
+Các endpoint GET công khai, không yêu cầu đăng nhập hoặc CSRF token. Nếu request có cookie, middleware vẫn kiểm tra phiên theo quy tắc Accounts hiện có.
+
+| Endpoint | Kết quả |
+| --- | --- |
+| `GET /api/bakeries` | Danh sách tiệm `active`, `is_demo = 0`; item gồm `id`, `name`, `slug`, `city`. |
+| `GET /api/bakeries/{id}` | Chi tiết cùng điều kiện public; thêm `description`, `addressLine`, `phone`. |
+| `GET /api/cakes` | Mẫu bánh `published`, không demo, thuộc tiệm active không demo; item gồm `id`, `bakeryId`, `name`, `referencePrice`, `currency`. Có filter `bakeryId` tùy chọn. |
+| `GET /api/cakes/{id}` | Chi tiết cùng điều kiện public; thêm `description`, `flavor`, `sizeLabel`. |
+
+- List nhận `page` mặc định 1 và `pageSize` mặc định 20 (1–100), sắp xếp `id ASC`; response có `items`, `page`, `pageSize`, `hasNext`. Không trả tổng số bản ghi hoặc ảnh trong MVP.
+- Paging thiếu/rỗng dùng default; `bakeryId` thiếu/rỗng nghĩa là không lọc. Query key khác bị bỏ qua. Input sai kiểu, tràn số, page/ID không dương hoặc size ngoài phạm vi → 400 ValidationProblemDetails.
+- ID là số nguyên long dương. Detail không tồn tại hoặc không public đều trả 404 ProblemDetails. List rỗng/vượt trang cuối hoặc filter bakery không tồn tại/không public trả 200 với `items: []`.
+- Giữ null của cột nullable; giá dùng decimal/JSON number hoặc null, không thay null bằng 0. Lỗi hệ thống trả masked 500 theo cấu hình hiện có.
+- Chạy API bằng profile HTTPS rồi thử `https://localhost:7215/api/bakeries?page=1&pageSize=2` hoặc `https://localhost:7215/api/cakes?page=1&pageSize=2`. Không seed/sửa Aiven để tạo dữ liệu thử. Xem [tests/README.md](tests/README.md) cho kiểm thử local.
 
 ## Trạng thái xác minh — 15/10/2026
 

@@ -1,5 +1,9 @@
 using DeCakes.Application.Accounts;
+using DeCakes.Application.Bakeries;
+using DeCakes.Application.Cakes;
 using DeCakes.Infrastructure.Accounts;
+using DeCakes.Infrastructure.Bakeries;
+using DeCakes.Infrastructure.Cakes;
 using DeCakes.Infrastructure.Persistence;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +18,8 @@ public static class DependencyInjection
         services.AddSingleton<IMySqlConnectionFactory>(new MySqlConnectionFactory(configuration));
         services.AddSingleton<IPasswordHashService, AspNetPasswordHashService>();
         services.AddScoped<IUserAccountStore, MySqlUserAccountStore>();
+        services.AddScoped<IBakeryCatalogStore, MySqlBakeryCatalogStore>();
+        services.AddScoped<ICakeCatalogStore, MySqlCakeCatalogStore>();
         return services;
     }
 }
