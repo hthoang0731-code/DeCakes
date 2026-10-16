@@ -1,6 +1,6 @@
 # Kế hoạch backend làm việc với database
 
-Tài liệu kế hoạch, chưa có mã nào được triển khai. Căn cứ: [database/SCHEMA.md](../database/SCHEMA.md), [database/STORED_PROCEDURES.md](../database/STORED_PROCEDURES.md) và các file SQL trong [database/](../database/). Mục đánh dấu **[cần chốt]** là quyết định nhóm phải đưa ra trước khi viết mã; **[cần xác minh]** là điều chưa kiểm chứng được từ SQL và phải thử trên môi trường thật.
+Tài liệu kế hoạch dựa trên [database/SCHEMA.md](../database/SCHEMA.md), [database/STORED_PROCEDURES.md](../database/STORED_PROCEDURES.md) và các file SQL trong [database/](../database/). Accounts và hạ tầng MySqlConnector đã có mã; các luồng nghiệp vụ khác bên dưới vẫn là kế hoạch. Xem [README](../README.md) cho hành vi Accounts hiện tại và [Catalog plan](CATALOG_PLAN.md) cho bước Catalog chỉ đọc. Mục **[cần chốt]** cần quyết định trước khi triển khai phần liên quan; **[cần xác minh]** cần thử trên môi trường kiểm thử riêng, không ghi Aiven. Kết quả xác minh cũ được ghi lại không thay thế kiểm tra mới.
 
 ## 1. Đối chiếu SQL với quy tắc nghiệp vụ
 
@@ -88,13 +88,13 @@ Thiếu (không tự tạo thêm):
 
 - **Không có procedure đăng ký hay đăng nhập.** Đăng ký là INSERT trực tiếp vào `users`; đăng nhập là SELECT theo email và so khớp hash ở backend. Điều này phù hợp với thiết kế nguồn: "stored procedure không xác thực người dùng".
 - Không có bảng cho refresh token, xác minh email, đặt lại mật khẩu, khóa tài khoản tạm thời sau nhiều lần sai, hay nhật ký đăng nhập.
-- Không có luồng tạo tiệm cùng thành viên đầu tiên trong một thao tác; cần backend tự ghép (`bakeries` + `bakery_members`) và nên bọc trong transaction EF vì không dính procedure.
+- Không có luồng tạo tiệm cùng thành viên đầu tiên trong một thao tác; cần backend tự ghép (`bakeries` + `bakery_members`) và có thể dùng transaction ADO.NET trong Infrastructure vì không dính procedure. Luồng này chưa triển khai, cần phạm vi riêng.
 - Không có quản lý vai trò `admin` trong procedure nào; `admin` chỉ tồn tại như giá trị trong CHECK.
 - Mỗi người chỉ có một `system_role`: một user vừa là khách vừa là nhân viên tiệm không được (guard khách đòi `customer`, guard thành viên đòi `bakery`). **[cần chốt]** phù hợp với nhu cầu hay không.
 
 ## 6. Thứ tự triển khai
 
-1. **Accounts**: đăng ký, đăng nhập, xác thực, claim (user id, role). Đồng thời tạo tiệm và thành viên (cần cho báo giá). Nền cho mọi bước sau.
+1. **Accounts**: đăng ký customer, đăng nhập, cookie, CSRF và claim (user id, role) đã có. Tạo tiệm và thành viên (cần cho báo giá) chưa có, cần lập kế hoạch riêng.
 2. **Catalog đọc** (Bakeries/mẫu bánh, chỉ đọc) có thể làm song song, chia việc cho thành viên thứ hai.
 3. **DesignRequests**: tạo/sửa yêu cầu, upload ảnh tham khảo (ghi `media_assets`), gửi đến tiệm (`sp_send_request_to_bakery`). Tiệm xem yêu cầu nhận được.
 4. **Quotes**: tạo, sửa, rút báo giá (3 procedure); khách xem báo giá của yêu cầu, lọc hết hạn.
@@ -107,7 +107,7 @@ Lý do: Quotes cần thành viên tiệm và yêu cầu đã gửi; Orders cần
 
 | # | Quyết định | Ảnh hưởng |
 | --- | --- | --- |
-| 1 | Cơ chế đăng nhập: ASP.NET Core Identity hay tự xây trên `users` (`PasswordHasher`); cookie hay JWT; có refresh token không. Identity cần bảng riêng, không khớp `users` hiện có nếu giữ nguyên schema | Authentication, có thể cần thay đổi schema |
+| 1 | Đã triển khai: dùng bảng `users`, Microsoft `PasswordHasher`, cookie HttpOnly/Secure và CSRF; không thêm bảng Identity, không JWT/refresh token. Không còn là quyết định mở cho Catalog | Giữ hành vi Accounts hiện có; xem README |
 | 2 | Tiệm từ chối yêu cầu: UPDATE trực tiếp hay thêm procedure; có cần "đã xem" | Thiếu procedure |
 | 3 | "Tiệm xác nhận khả năng làm bánh" nghĩa là gì (mục 1) | Có thể cần thay đổi nghiệp vụ |
 | 4 | Một user chỉ một vai trò; khách và tiệm có thể là cùng người không | Accounts |
@@ -121,7 +121,7 @@ Lý do: Quotes cần thành viên tiệm và yêu cầu đã gửi; Orders cần
 
 ## 8. Bước tiếp theo
 
-1. Chạy lại `dotnet run scripts/SetDbSecret.cs` để secret đúng định dạng MySqlConnector (secret cũ do bản dùng MySql.Data ghi).
-2. Chốt quyết định số 1 trong bảng trên rồi triển khai Accounts (đăng ký, đăng nhập) qua `IMySqlConnectionFactory`.
-3. Kiểm chứng cách đọc OUT parameter và SQLSTATE 45000 trên MySqlConnector bằng thử nghiệm có kiểm soát trước khi viết mã gọi procedure.
+1. Đọc [quy trình phát triển](DEVELOPMENT_WORKFLOW.md); chỉ dùng `dotnet run scripts/SetDbSecret.cs` nếu cần cấu hình hoặc sửa secret cũ, không chạy như bước kiểm tra tự động.
+2. Chốt các câu hỏi trong [Catalog plan](CATALOG_PLAN.md), rồi lập phạm vi và kiểm thử cho Catalog chỉ đọc; không triển khai lại Accounts.
+3. Trước khi triển khai luồng ghi qua procedure, kiểm chứng OUT parameter và SQLSTATE 45000 trên MySqlConnector bằng MySQL kiểm thử riêng; không dùng Aiven cho thử nghiệm ghi.
 4. Không chạy migration, `EnsureCreated` hay lệnh thay đổi database.

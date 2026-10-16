@@ -87,6 +87,81 @@ public sealed class MySqlTestDatabase : IAsyncLifetime
         Available = true;
     }
 
+    /// <summary>Nạp một tiệm bằng kết nối setup, chỉ trong database kiểm thử riêng; không tăng quyền của Factory.</summary>
+    public async Task<long> SeedBakeryAsync(
+        string name, string profileStatus = "active", bool isDemo = false, string? city = null,
+        string? description = null, string? addressLine = null, string? phone = null)
+    {
+        if (!Available || _admin is null || !MySqlTestSettings.IsTestDatabaseName(DatabaseName))
+        {
+            throw new InvalidOperationException("Chưa có database kiểm thử an toàn để nạp bakery.");
+        }
+
+        var setup = new MySqlConnectionStringBuilder(_admin.ConnectionString) { Database = DatabaseName };
+        await using var connection = new MySqlConnection(setup.ConnectionString);
+        await connection.OpenAsync();
+        await using (var check = new MySqlCommand("SELECT DATABASE()", connection))
+        {
+            if (!string.Equals(await check.ExecuteScalarAsync() as string, DatabaseName, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Kết nối setup không ở database kiểm thử.");
+            }
+        }
+
+        await using var command = new MySqlCommand(
+            """
+            INSERT INTO bakeries (name, slug, city, profile_status, is_demo, description, address_line, phone)
+            VALUES (@name, @slug, @city, @profileStatus, @isDemo, @description, @addressLine, @phone)
+            """, connection);
+        command.Parameters.AddWithValue("@name", name);
+        command.Parameters.AddWithValue("@slug", "test-" + Guid.NewGuid().ToString("N"));
+        command.Parameters.AddWithValue("@city", (object?)city ?? DBNull.Value);
+        command.Parameters.AddWithValue("@profileStatus", profileStatus);
+        command.Parameters.AddWithValue("@isDemo", isDemo);
+        command.Parameters.AddWithValue("@description", (object?)description ?? DBNull.Value);
+        command.Parameters.AddWithValue("@addressLine", (object?)addressLine ?? DBNull.Value);
+        command.Parameters.AddWithValue("@phone", (object?)phone ?? DBNull.Value);
+        await command.ExecuteNonQueryAsync();
+        return command.LastInsertedId;
+    }
+
+    public async Task<long> SeedCakeAsync(
+        long bakeryId, string name, string visibility = "published", bool isDemo = false,
+        decimal? referencePrice = null, string? description = null, string? flavor = null, string? sizeLabel = null)
+    {
+        if (!Available || _admin is null || !MySqlTestSettings.IsTestDatabaseName(DatabaseName))
+        {
+            throw new InvalidOperationException("Chưa có database kiểm thử an toàn để nạp cake.");
+        }
+
+        var setup = new MySqlConnectionStringBuilder(_admin.ConnectionString) { Database = DatabaseName };
+        await using var connection = new MySqlConnection(setup.ConnectionString);
+        await connection.OpenAsync();
+        await using (var check = new MySqlCommand("SELECT DATABASE()", connection))
+        {
+            if (!string.Equals(await check.ExecuteScalarAsync() as string, DatabaseName, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Kết nối setup không ở database kiểm thử.");
+            }
+        }
+
+        await using var command = new MySqlCommand(
+            """
+            INSERT INTO cakes (bakery_id, name, visibility, is_demo, reference_price, description, flavor, size_label)
+            VALUES (@bakeryId, @name, @visibility, @isDemo, @price, @description, @flavor, @sizeLabel)
+            """, connection);
+        command.Parameters.AddWithValue("@bakeryId", bakeryId);
+        command.Parameters.AddWithValue("@name", name);
+        command.Parameters.AddWithValue("@visibility", visibility);
+        command.Parameters.AddWithValue("@isDemo", isDemo);
+        command.Parameters.AddWithValue("@price", (object?)referencePrice ?? DBNull.Value);
+        command.Parameters.AddWithValue("@description", (object?)description ?? DBNull.Value);
+        command.Parameters.AddWithValue("@flavor", (object?)flavor ?? DBNull.Value);
+        command.Parameters.AddWithValue("@sizeLabel", (object?)sizeLabel ?? DBNull.Value);
+        await command.ExecuteNonQueryAsync();
+        return command.LastInsertedId;
+    }
+
     public async Task DisposeAsync()
     {
         if (_admin is null)

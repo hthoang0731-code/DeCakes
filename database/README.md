@@ -10,7 +10,7 @@ Các script SQL của `decakes_db` (MySQL 8.4, Aiven), schema phiên bản 2. Đ
 | --- | --- |
 | [SCHEMA.md](SCHEMA.md) | Bảng, cột, ràng buộc, quan hệ, trạng thái; cách database bảo đảm một yêu cầu tạo tối đa một đơn |
 | [STORED_PROCEDURES.md](STORED_PROCEDURES.md) | 11 stored procedure: tham số, lỗi, transaction, khóa, lưu ý khi gọi từ backend |
-| [../docs/BACKEND_DATABASE_PLAN.md](../docs/BACKEND_DATABASE_PLAN.md) | Kế hoạch scaffold DbContext, cách gọi procedure, thứ tự triển khai, các điểm cần chốt |
+| [../docs/BACKEND_DATABASE_PLAN.md](../docs/BACKEND_DATABASE_PLAN.md) | Kế hoạch ADO.NET/MySqlConnector, cách gọi procedure, thứ tự triển khai, các điểm cần chốt; không scaffold DbContext |
 
 Hai tài liệu SCHEMA và STORED_PROCEDURES lập từ các file SQL bên dưới, không từ tài liệu tóm tắt. Chưa kết nối hay chạy trên database nào.
 

@@ -17,7 +17,10 @@ namespace DeCakes.Api.Tests.Infrastructure;
 /// Api chạy trong TestServer với store user trong bộ nhớ: không kết nối database thật.
 /// Môi trường "Testing" nên không nạp user-secrets.
 /// </summary>
-public sealed class TestApp(int authPermitLimit = 1000, string environment = "Testing") : WebApplicationFactory<Program>
+public sealed class TestApp(
+    int authPermitLimit = 1000,
+    string environment = "Testing",
+    Action<IServiceCollection>? configureServices = null) : WebApplicationFactory<Program>
 {
     public InMemoryUserStore Store { get; } = new();
 
@@ -39,6 +42,7 @@ public sealed class TestApp(int authPermitLimit = 1000, string environment = "Te
                 CookieAuthenticationDefaults.AuthenticationScheme, o => o.TimeProvider = Time);
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
             services.AddControllers().AddApplicationPart(typeof(TestApp).Assembly);
+            configureServices?.Invoke(services);
         });
     }
 
