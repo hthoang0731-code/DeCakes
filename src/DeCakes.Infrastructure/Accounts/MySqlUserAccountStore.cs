@@ -6,7 +6,9 @@ namespace DeCakes.Infrastructure.Accounts;
 
 public sealed class MySqlUserAccountStore(IMySqlConnectionFactory connectionFactory) : IUserAccountStore
 {
-    private const string AccountColumns = "id, email, full_name, phone, system_role, status";
+    // email_verified_at, session_version: migrations/V003__account_security.sql.
+    internal const string AccountColumns =
+        "id, email, full_name, phone, system_role, status, email_verified_at, session_version, is_demo";
 
     public async Task<UserCredentials?> FindByEmailAsync(string normalizedEmail, CancellationToken cancellationToken)
     {
@@ -84,7 +86,7 @@ public sealed class MySqlUserAccountStore(IMySqlConnectionFactory connectionFact
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
-    private static UserAccount ReadAccount(MySqlDataReader reader)
+    internal static UserAccount ReadAccount(MySqlDataReader reader)
     {
         var phoneOrdinal = reader.GetOrdinal("phone");
         return new UserAccount(
@@ -93,6 +95,9 @@ public sealed class MySqlUserAccountStore(IMySqlConnectionFactory connectionFact
             reader.GetString(reader.GetOrdinal("full_name")),
             reader.IsDBNull(phoneOrdinal) ? null : reader.GetString(phoneOrdinal),
             reader.GetString(reader.GetOrdinal("system_role")),
-            reader.GetString(reader.GetOrdinal("status")));
+            reader.GetString(reader.GetOrdinal("status")),
+            EmailVerified: !reader.IsDBNull(reader.GetOrdinal("email_verified_at")),
+            SessionVersion: Convert.ToInt64(reader.GetValue(reader.GetOrdinal("session_version"))),
+            IsDemo: reader.GetBoolean(reader.GetOrdinal("is_demo")));
     }
 }

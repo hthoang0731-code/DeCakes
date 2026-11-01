@@ -23,6 +23,14 @@ internal sealed class FakeUserStore : IUserAccountStore
         return id;
     }
 
+    /// <summary>Thêm user với đầy đủ thuộc tính (xác minh email, demo); id do store gán.</summary>
+    public long AddAccount(UserAccount account, string? hash = null)
+    {
+        var id = _users.Count + 1;
+        _users.Add((account with { Id = id }, hash));
+        return id;
+    }
+
     public string? HashOf(long id) => _users.Single(u => u.Account.Id == id).Hash;
 
     public Task<UserCredentials?> FindByEmailAsync(string normalizedEmail, CancellationToken cancellationToken)

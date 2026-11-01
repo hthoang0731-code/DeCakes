@@ -159,7 +159,8 @@ public class AuthApiTests
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await JsonAsync(response);
-        Assert.Equal(["id", "email", "fullName", "phone", "role"], body.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["id", "email", "fullName", "phone", "role", "emailVerified"], body.EnumerateObject().Select(p => p.Name));
+        Assert.False(body.GetProperty("emailVerified").GetBoolean());
         Assert.Equal("new@example.com", body.GetProperty("email").GetString());
         Assert.Equal(SystemRoles.Customer, body.GetProperty("role").GetString());
         Assert.Null(client.SetCookieFor(AuthCookie));
@@ -249,7 +250,8 @@ public class AuthApiTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await JsonAsync(response);
         Assert.Equal(id, body.GetProperty("id").GetInt64());
-        Assert.Equal(["id", "email", "fullName", "phone", "role"], body.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["id", "email", "fullName", "phone", "role", "emailVerified"], body.EnumerateObject().Select(p => p.Name));
+        Assert.True(body.GetProperty("emailVerified").GetBoolean());
 
         var cookie = client.SetCookieFor(AuthCookie)!.ToLowerInvariant();
         Assert.StartsWith("__host-decakes.auth=", cookie);

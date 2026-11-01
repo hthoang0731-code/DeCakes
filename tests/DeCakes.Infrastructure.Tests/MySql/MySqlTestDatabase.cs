@@ -6,8 +6,8 @@ namespace DeCakes.Infrastructure.Tests.MySql;
 
 /// <summary>
 /// Tạo một database decakes_test_* và một tài khoản dc_test_* riêng trên MySQL 8.4 kiểm thử (loopback),
-/// nạp schema nguồn, rồi xóa cả hai khi xong. Tài khoản kiểm thử có quyền như decakes_app trên bảng users
-/// (SELECT, INSERT, UPDATE; không DELETE).
+/// nạp schema và procedure nguồn, cấp cho tài khoản kiểm thử đúng quyền của backend (security/app_user_grants.sql),
+/// rồi xóa cả hai khi xong. Procedure do tài khoản quản trị kiểm thử tạo (DEFINER), giống production.
 /// </summary>
 public sealed class MySqlTestDatabase : IAsyncLifetime
 {
@@ -15,13 +15,20 @@ public sealed class MySqlTestDatabase : IAsyncLifetime
 
     public bool Available { get; private set; }
 
+    // Catalog dùng tài khoản chỉ đọc; các luồng ghi giữ đúng quyền backend nguồn.
+    public bool CatalogReadOnly { get; init; }
+
     public string DatabaseName { get; } = MySqlTestSettings.DatabasePrefix + Guid.NewGuid().ToString("N")[..12];
 
     public string UserName { get; } = MySqlTestSettings.UserPrefix + Guid.NewGuid().ToString("N")[..12];
 
     public string ServerVersion { get; private set; } = "";
 
+    /// <summary>Kết nối bằng tài khoản kiểm thử có quyền như decakes_app. Dùng cho store đang được kiểm thử.</summary>
     public IMySqlConnectionFactory Factory { get; private set; } = null!;
+
+    /// <summary>Kết nối quản trị vào database kiểm thử. Chỉ dùng để chuẩn bị dữ liệu và mô phỏng thao tác đồng thời.</summary>
+    public IMySqlConnectionFactory AdminFactory { get; private set; } = null!;
 
     public async Task InitializeAsync()
     {
@@ -49,30 +56,46 @@ public sealed class MySqlTestDatabase : IAsyncLifetime
             await ExecuteAsync(connection, $"CREATE DATABASE `{DatabaseName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci");
         }
 
-        // Nạp schema trong đúng database tạm; kiểm tra lại database hiện tại trước khi chạy script.
-        var schemaConnection = new MySqlConnectionStringBuilder(_admin.ConnectionString) { Database = DatabaseName };
-        await using (var connection = new MySqlConnection(schemaConnection.ConnectionString))
+        var adminInDatabase = new MySqlConnectionStringBuilder(_admin.ConnectionString)
         {
-            await connection.OpenAsync();
+            Database = DatabaseName,
+            DateTimeKind = MySqlDateTimeKind.Utc,
+        };
+        AdminFactory = new TestConnectionFactory(adminInDatabase.ConnectionString);
+
+        // Nạp schema rồi procedure trong đúng database tạm; kiểm tra lại database hiện tại trước khi chạy.
+        await using (var connection = await AdminFactory.OpenConnectionAsync())
+        {
             await using (var check = new MySqlCommand("SELECT DATABASE()", connection))
             {
                 if (!string.Equals(await check.ExecuteScalarAsync() as string, DatabaseName, StringComparison.Ordinal))
                 {
-                    throw new InvalidOperationException("Kết nối nạp schema không ở database kiểm thử.");
+                    throw new InvalidOperationException("Kết nối nạp script không ở database kiểm thử.");
                 }
             }
 
-            await ExecuteAsync(connection, SchemaScript.LoadSanitizedSchema());
+            foreach (var file in new[] { SchemaScript.SchemaFile, SchemaScript.ProceduresFile }.Concat(SchemaScript.MigrationFiles))
+            {
+                foreach (var statement in SqlScriptSplitter.Split(SchemaScript.LoadSanitized(file)))
+                {
+                    await ExecuteAsync(connection, statement);
+                }
+            }
         }
 
-        // Tài khoản kiểm thử tạo sau khi có bảng: GRANT mức bảng cần bảng đã tồn tại.
+        // Tài khoản kiểm thử tạo sau khi có bảng (GRANT mức bảng/cột cần bảng đã tồn tại).
         await using (var connection = new MySqlConnection(_admin.ConnectionString))
         {
             await connection.OpenAsync();
             var password = Convert.ToBase64String(RandomNumberGenerator.GetBytes(24));
             await ExecuteAsync(connection, $"CREATE USER '{UserName}'@'%' IDENTIFIED BY @password", ("@password", password));
-            await ExecuteAsync(connection, $"GRANT SELECT ON `{DatabaseName}`.* TO '{UserName}'@'%'");
-            await ExecuteAsync(connection, $"GRANT INSERT, UPDATE ON `{DatabaseName}`.`users` TO '{UserName}'@'%'");
+            var grants = CatalogReadOnly
+                ? new[] { $"GRANT SELECT ON `{DatabaseName}`.* TO '{UserName}'@'%'" }
+                : SchemaScript.LoadGrantsFor(DatabaseName, UserName);
+            foreach (var grant in grants)
+            {
+                await ExecuteAsync(connection, grant);
+            }
 
             var testUser = new MySqlConnectionStringBuilder(_admin.ConnectionString)
             {
@@ -162,6 +185,20 @@ public sealed class MySqlTestDatabase : IAsyncLifetime
         return command.LastInsertedId;
     }
 
+    /// <summary>
+    /// Cấp cho tiệm một kỳ sử dụng (trial) bằng kết nối quản trị kiểm thử, từ hôm qua tới một năm sau theo giờ thật (procedure
+    /// so với giờ database). Từ migrations/V005 tiệm cần kỳ còn hạn để nhận yêu cầu/báo giá/đơn mới.
+    /// </summary>
+    public async Task GrantAccessAsync(long bakeryId, DateTime? startsAt = null, DateTime? endsAt = null)
+    {
+        var planId = await AdminExecuteAsync(
+            "INSERT INTO subscription_plans (code, name, status) VALUES (@c, 'Gói kiểm thử', 'active')",
+            ("@c", "test-" + Guid.NewGuid().ToString("N")[..12]));
+        await AdminExecuteAsync(
+            "INSERT INTO bakery_subscription_periods (bakery_id, plan_id, period_kind, starts_at, ends_at) VALUES (@b, @p, 'trial', @s, @e)",
+            ("@b", bakeryId), ("@p", planId), ("@s", startsAt ?? DateTime.UtcNow.AddDays(-1)), ("@e", endsAt ?? DateTime.UtcNow.AddYears(1)));
+    }
+
     public async Task DisposeAsync()
     {
         if (_admin is null)
@@ -169,6 +206,7 @@ public sealed class MySqlTestDatabase : IAsyncLifetime
             return;
         }
 
+        MySqlConnection.ClearAllPools();
         await using var connection = new MySqlConnection(_admin.ConnectionString);
         await connection.OpenAsync();
         if (MySqlTestSettings.IsTestDatabaseName(DatabaseName))
@@ -177,6 +215,34 @@ public sealed class MySqlTestDatabase : IAsyncLifetime
         }
 
         await ExecuteAsync(connection, $"DROP USER IF EXISTS '{UserName}'@'%'");
+    }
+
+    /// <summary>Chạy câu lệnh bằng tài khoản quản trị trong database kiểm thử; trả về LAST_INSERT_ID.</summary>
+    public async Task<long> AdminExecuteAsync(string sql, params (string Name, object? Value)[] parameters)
+    {
+        await using var connection = await AdminFactory.OpenConnectionAsync();
+        await using var command = Command(connection, sql, parameters);
+        await command.ExecuteNonQueryAsync();
+        return command.LastInsertedId;
+    }
+
+    public async Task<object?> AdminScalarAsync(string sql, params (string Name, object? Value)[] parameters)
+    {
+        await using var connection = await AdminFactory.OpenConnectionAsync();
+        await using var command = Command(connection, sql, parameters);
+        var value = await command.ExecuteScalarAsync();
+        return value is DBNull ? null : value;
+    }
+
+    public static MySqlCommand Command(MySqlConnection connection, string sql, params (string Name, object? Value)[] parameters)
+    {
+        var command = new MySqlCommand(sql, connection);
+        foreach (var (name, value) in parameters)
+        {
+            command.Parameters.AddWithValue(name, value ?? DBNull.Value);
+        }
+
+        return command;
     }
 
     private static async Task ExecuteAsync(MySqlConnection connection, string sql, params (string Name, object Value)[] parameters)

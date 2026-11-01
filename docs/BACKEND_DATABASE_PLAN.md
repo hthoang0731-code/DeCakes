@@ -1,6 +1,6 @@
 # Kế hoạch backend làm việc với database
 
-Tài liệu kế hoạch dựa trên [database/SCHEMA.md](../database/SCHEMA.md), [database/STORED_PROCEDURES.md](../database/STORED_PROCEDURES.md) và các file SQL trong [database/](../database/). Accounts và hạ tầng MySqlConnector đã có mã; các luồng nghiệp vụ khác bên dưới vẫn là kế hoạch. Xem [README](../README.md) cho hành vi Accounts hiện tại và [Catalog plan](CATALOG_PLAN.md) cho bước Catalog chỉ đọc. Mục **[cần chốt]** cần quyết định trước khi triển khai phần liên quan; **[cần xác minh]** cần thử trên môi trường kiểm thử riêng, không ghi Aiven. Kết quả xác minh cũ được ghi lại không thay thế kiểm tra mới.
+Tài liệu kế hoạch dựa trên [database/SCHEMA.md](../database/SCHEMA.md), [database/STORED_PROCEDURES.md](../database/STORED_PROCEDURES.md) và các file SQL trong [database/](../database/). Đã có mã: hạ tầng ADO.NET/MySqlConnector (`IMySqlConnectionFactory`, `VerifyFull`), **Accounts** (đăng ký, đăng nhập cookie, CSRF), **Catalog** chỉ đọc (tiệm và mẫu bánh công khai), **DesignRequests** của khách (tạo/sửa draft, danh sách, chi tiết, gửi tiệm qua `sp_send_request_to_bakery`, xem tiệm đã nhận) và **inbox của tiệm** chỉ đọc (tiệm của tôi, danh sách và chi tiết yêu cầu đã nhận, kiểm tra thành viên active ngay trong truy vấn). Các luồng còn lại bên dưới vẫn là kế hoạch: Quotes, Orders, đánh dấu đã xem/từ chối yêu cầu, đăng ký tiệm và quản lý thành viên, upload ảnh. Xem [README](../README.md) cho hành vi hiện tại và [Catalog plan](CATALOG_PLAN.md) cho bước Catalog chỉ đọc. Mục **[cần chốt]** cần quyết định trước khi triển khai phần liên quan; **[cần xác minh]** cần thử trên môi trường kiểm thử riêng, không ghi Aiven. Kết quả xác minh cũ được ghi lại không thay thế kiểm tra mới.
 
 ## 1. Đối chiếu SQL với quy tắc nghiệp vụ
 
@@ -88,7 +88,7 @@ Thiếu (không tự tạo thêm):
 
 - **Không có procedure đăng ký hay đăng nhập.** Đăng ký là INSERT trực tiếp vào `users`; đăng nhập là SELECT theo email và so khớp hash ở backend. Điều này phù hợp với thiết kế nguồn: "stored procedure không xác thực người dùng".
 - Không có bảng cho refresh token, xác minh email, đặt lại mật khẩu, khóa tài khoản tạm thời sau nhiều lần sai, hay nhật ký đăng nhập.
-- Không có luồng tạo tiệm cùng thành viên đầu tiên trong một thao tác; cần backend tự ghép (`bakeries` + `bakery_members`) và có thể dùng transaction ADO.NET trong Infrastructure vì không dính procedure. Luồng này chưa triển khai, cần phạm vi riêng.
+- Không có luồng tạo tiệm cùng thành viên đầu tiên trong một thao tác; cần backend tự ghép (`bakeries` + `bakery_members`) và nên bọc trong một transaction ADO.NET (`MySqlTransaction` trên cùng connection) trong Infrastructure; được phép vì thao tác này không gọi procedure tự quản lý transaction. Luồng này chưa triển khai, cần phạm vi riêng.
 - Không có quản lý vai trò `admin` trong procedure nào; `admin` chỉ tồn tại như giá trị trong CHECK.
 - Mỗi người chỉ có một `system_role`: một user vừa là khách vừa là nhân viên tiệm không được (guard khách đòi `customer`, guard thành viên đòi `bakery`). **[cần chốt]** phù hợp với nhu cầu hay không.
 

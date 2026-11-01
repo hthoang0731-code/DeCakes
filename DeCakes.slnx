@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/tools/">
+    <Project Path="tools/DeCakes.AdminBootstrap/DeCakes.AdminBootstrap.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/DeCakes.Api/DeCakes.Api.csproj" />
     <Project Path="src/DeCakes.Application/DeCakes.Application.csproj" />

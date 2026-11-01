@@ -5,7 +5,7 @@ namespace DeCakes.Infrastructure.Tests.MySql;
 
 public class MySqlCakeCatalogStoreTests : IAsyncLifetime
 {
-    private readonly MySqlTestDatabase _database = new();
+    private readonly MySqlTestDatabase _database = new() { CatalogReadOnly = true };
     private MySqlCakeCatalogStore Store => new(_database.Factory);
 
     public Task InitializeAsync() => _database.InitializeAsync();

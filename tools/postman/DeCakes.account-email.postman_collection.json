@@ -1,0 +1,1221 @@
+{
+  "info": {
+    "_postman_id": "6a0f3a52-6f8e-4d6b-9a3e-2d1c7f5b8e41",
+    "name": "DeCakes — nghiệm thu email tài khoản",
+    "description": "Chỉ gồm luồng đăng ký → xác minh email, gửi lại email, quên/đặt lại mật khẩu, đổi mật khẩu và thu hồi phiên. Request ghi bị khóa tới khi đặt scopeConfirmed = yes. Không có mật khẩu, token hay khóa trong file. Xem tools/postman/README.md, mục Nghiệm thu email.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Chỉ gọi API cục bộ qua HTTPS và đúng các endpoint nghiệm thu email tài khoản.",
+          "// Lỗi được ném ra để Postman hiển thị trong vùng response; không bỏ qua request âm thầm.",
+          "const target = pm.variables.replaceIn(pm.request.url.toString());",
+          "const m = /^https:\\/\\/(localhost|127\\.0\\.0\\.1):\\d+(\\/api\\/[a-z\\/-]+)$/.exec(target);",
+          "if (!m) throw new Error('URL phải là https://localhost:<cổng>/api/... hoặc https://127.0.0.1:<cổng>/api/... Kiểm tra baseUrl/baseUrlB (không có / ở cuối).');",
+          "const op = pm.request.method + ' ' + m[2];",
+          "const readOnly = ['GET /api/health', 'GET /api/auth/csrf', 'GET /api/auth/me', 'POST /api/auth/login', 'POST /api/auth/logout'];",
+          "const scoped = ['POST /api/auth/register', 'POST /api/auth/email-verification/resend', 'POST /api/auth/email-verification/confirm',",
+          "  'POST /api/auth/password/forgot', 'POST /api/auth/password/reset', 'POST /api/auth/password/change'];",
+          "if (!readOnly.includes(op) && !scoped.includes(op)) throw new Error(op + ' không thuộc phạm vi nghiệm thu email tài khoản.');",
+          "if (scoped.includes(op) && pm.environment.get('scopeConfirmed') !== 'yes') {",
+          "  throw new Error('Request ghi tài khoản đang khóa. Chỉ đặt scopeConfirmed = yes sau khi đã xác nhận phạm vi nghiệm thu (tools/postman/README.md, mục Nghiệm thu email).');",
+          "}",
+          "// Dựng lại body bằng JSON.stringify để mật khẩu có dấu nháy/backslash không làm hỏng JSON.",
+          "// Giá trị gõ thẳng vào body (không phải {{biến}}) được giữ nguyên; body không phải JSON được gửi nguyên để server báo lỗi.",
+          "if (pm.request.body && pm.request.body.mode === 'raw' && pm.request.body.raw) {",
+          "  let body = null;",
+          "  try { body = JSON.parse(pm.request.body.raw); } catch (e) { body = null; }",
+          "  if (body && typeof body === 'object' && !Array.isArray(body)) {",
+          "    for (const k of Object.keys(body)) { if (typeof body[k] === 'string') body[k] = pm.variables.replaceIn(body[k]); }",
+          "    pm.request.body.update(JSON.stringify(body));",
+          "  }",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "if (pm.response.code >= 400) {",
+          "  pm.test('Lỗi không lộ chuỗi kết nối hoặc stack trace', () => pm.expect(pm.response.text()).not.to.match(/(?:password_hash|MySqlException|at DeCakes\\.|Server=[^;]+;Port=)/i));",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "1 — Chuẩn bị",
+      "description": "Chạy API bằng profile https trước. Không ghi dữ liệu.",
+      "item": [
+        {
+          "name": "1.1 Health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Health: HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "health"
+              ]
+            },
+            "description": "Mong đợi 200. Không kiểm tra database."
+          }
+        },
+        {
+          "name": "1.2 Lấy CSRF (client A)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('CSRF: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { const b = pm.response.json(); pm.test('Header CSRF đúng', () => pm.expect(b.headerName).to.eql('X-CSRF-TOKEN')); pm.environment.set('csrfToken', b.token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/csrf",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "csrf"
+              ]
+            },
+            "description": "Lưu csrfToken. Chạy lại sau mỗi lần đăng nhập/đăng xuất."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 — Đăng ký và xác minh email",
+      "description": "Ghi: tạo 1 customer, 2 token xác minh, đánh dấu email đã xác minh. Gửi 2 email xác minh.",
+      "item": [
+        {
+          "name": "2.1 Đăng ký customer kiểm thử",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Đăng ký: HTTP 201', () => pm.response.to.have.status(201));",
+                  "if (pm.response.code === 201) { const u = pm.response.json(); pm.environment.set('testUserId', String(u.id)); pm.test('emailVerified = false', () => pm.expect(u.emailVerified).to.eql(false)); }",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Ghi vào database API đang dùng: INSERT 1 user customer + 1 token xác minh; Resend gửi email xác minh thứ nhất. 201 chưa chứng minh email đã gửi — kiểm tra log API và hộp thư.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\",\n  \"fullName\": \"{{testFullName}}\",\n  \"phone\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2.2 Đăng nhập (mật khẩu ban đầu)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Đăng nhập: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.test('Role customer', () => pm.expect(pm.response.json().role).to.eql('customer')); }",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Gõ mật khẩu vào biến testPassword (Current value) hoặc thay thẳng {{testPassword}} trong Body. Luôn gửi request; lỗi hiện ở response.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2.3 Lấy CSRF mới (client A)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('CSRF: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { const b = pm.response.json(); pm.test('Header CSRF đúng', () => pm.expect(b.headerName).to.eql('X-CSRF-TOKEN')); pm.environment.set('csrfToken', b.token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/csrf",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "csrf"
+              ]
+            },
+            "description": "Token CSRF gắn với danh tính; lấy lại sau khi đăng nhập."
+          }
+        },
+        {
+          "name": "2.4 Me — chưa xác minh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Me: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) pm.test('emailVerified = false', () => pm.expect(pm.response.json().emailVerified).to.eql(false));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Mong đợi emailVerified = false."
+          }
+        },
+        {
+          "name": "2.5 Gửi lại email xác minh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Gửi lại: HTTP 202', () => pm.response.to.have.status(202));",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email-verification/resend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email-verification",
+                "resend"
+              ]
+            },
+            "description": "Chờ ít nhất 60 giây sau bước 2.1. Ghi: thu hồi token cũ, cấp token mới; Resend gửi email xác minh thứ hai. Link trong email thứ nhất hết hiệu lực. 429 = gửi quá sớm; 503 = Resend chưa nhận (xem log API)."
+          }
+        },
+        {
+          "name": "2.6 Token của email THỨ NHẤT phải bị từ chối",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Token cũ đã bị thu hồi: HTTP 400', () => pm.response.to.have.status(400));",
+                  "if (pm.response.code === 400) pm.test('code = TOKEN_INVALID', () => pm.expect(pm.response.json().code).to.eql('TOKEN_INVALID'));",
+                  "pm.environment.unset('oldVerificationToken');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email-verification/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email-verification",
+                "confirm"
+              ]
+            },
+            "description": "Chép phần sau #token= trong email xác minh thứ nhất (gửi ở bước 2.1) vào oldVerificationToken. Mong đợi 400 TOKEN_INVALID vì bước 2.5 đã thu hồi token này; không ghi gì. Sau bước này script xóa biến.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{oldVerificationToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2.7 Xác minh email bằng token từ email MỚI NHẤT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Xác minh: HTTP 204', () => pm.response.to.have.status(204));",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email-verification/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email-verification",
+                "confirm"
+              ]
+            },
+            "description": "Mở email xác minh thứ hai, chép phần sau #token= (43 ký tự) vào biến verificationToken. Không dán token vào chat. Ghi: dùng token, đặt email_verified_at.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{verificationToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "2.8 Me — đã xác minh",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Me: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) pm.test('emailVerified = true', () => pm.expect(pm.response.json().emailVerified).to.eql(true));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Mong đợi emailVerified = true."
+          }
+        },
+        {
+          "name": "2.9 Dùng lại token đã dùng phải bị từ chối",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Token dùng một lần: HTTP 400', () => pm.response.to.have.status(400));",
+                  "if (pm.response.code === 400) pm.test('code = TOKEN_INVALID', () => pm.expect(pm.response.json().code).to.eql('TOKEN_INVALID'));",
+                  "pm.environment.unset('verificationToken');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/email-verification/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "email-verification",
+                "confirm"
+              ]
+            },
+            "description": "Gửi lại cùng verificationToken. Mong đợi 400 TOKEN_INVALID; không ghi gì. Sau bước này script xóa biến token.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{verificationToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 — Quên và đặt lại mật khẩu",
+      "description": "Ghi: 1 token đặt lại, đổi hash, tăng session_version. Gửi 1 email đặt lại.",
+      "item": [
+        {
+          "name": "3.1 Đăng xuất (client A)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Đăng xuất: HTTP 204', () => pm.response.to.have.status(204));",
+                  "if (pm.response.code === 204) pm.environment.unset('csrfToken');"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Xóa cookie đăng nhập của client A."
+          }
+        },
+        {
+          "name": "3.2 Lấy CSRF mới (client A)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('CSRF: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { const b = pm.response.json(); pm.test('Header CSRF đúng', () => pm.expect(b.headerName).to.eql('X-CSRF-TOKEN')); pm.environment.set('csrfToken', b.token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/csrf",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "csrf"
+              ]
+            },
+            "description": "Sau đăng xuất phải lấy CSRF mới."
+          }
+        },
+        {
+          "name": "3.3 Quên mật khẩu",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Quên mật khẩu: HTTP 202', () => pm.response.to.have.status(202));",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/password/forgot",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "password",
+                "forgot"
+              ]
+            },
+            "description": "Luôn 202 dù email có hay không — 202 không chứng minh đã gửi. Ghi: 1 token đặt lại (hạn 30 phút); Resend gửi email đặt lại. Kiểm tra log API và hộp thư. 429 không kèm code là giới hạn 5 request khôi phục/5 phút theo IP (bước 2.5–2.9 đã dùng 4): chờ tối đa 5 phút rồi gửi lại; 429 không ghi và không gửi email. Áp dụng tương tự cho 3.4.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3.4 Đặt mật khẩu mới bằng token từ email",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Đặt lại: HTTP 204', () => pm.response.to.have.status(204));",
+                  "if (pm.response.code === 204) pm.environment.unset('resetToken');",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/password/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "password",
+                "reset"
+              ]
+            },
+            "description": "Chép phần sau #token= trong email đặt lại vào resetToken; mật khẩu mới vào resetPassword (12–128 ký tự, khác testPassword). Ghi: đổi hash, tăng session_version, thu hồi token đặt lại khác.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"newPassword\": \"{{resetPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3.5 Đăng nhập bằng mật khẩu CŨ phải thất bại",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Mật khẩu cũ bị từ chối: HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Dùng testPassword (mật khẩu trước khi đặt lại). Mong đợi 401.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{testPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3.6 Đăng nhập bằng mật khẩu MỚI",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Đăng nhập mật khẩu mới: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.test('Role customer', () => pm.expect(pm.response.json().role).to.eql('customer')); }",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Dùng resetPassword. Mong đợi 200.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{resetPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "3.7 Lấy CSRF mới (client A)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('CSRF: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { const b = pm.response.json(); pm.test('Header CSRF đúng', () => pm.expect(b.headerName).to.eql('X-CSRF-TOKEN')); pm.environment.set('csrfToken', b.token); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/csrf",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "csrf"
+              ]
+            },
+            "description": "Sau đăng nhập."
+          }
+        },
+        {
+          "name": "3.8 Me — sau đặt lại",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Me: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) pm.test('emailVerified = true', () => pm.expect(pm.response.json().emailVerified).to.eql(true));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Mong đợi 200, emailVerified = true."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 — Đổi mật khẩu và thu hồi phiên client khác",
+      "description": "Client B dùng baseUrlB (https://127.0.0.1:7215): Postman giữ cookie theo host nên đây là phiên độc lập với client A (localhost). Ghi: đổi hash, tăng session_version. Không gửi email.",
+      "item": [
+        {
+          "name": "4.1 Client B: lấy CSRF",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('CSRF client B: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) pm.environment.set('csrfTokenB', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrlB}}/api/auth/csrf",
+              "host": [
+                "{{baseUrlB}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "csrf"
+              ]
+            },
+            "description": "Nếu lỗi chứng chỉ ở 127.0.0.1, dừng và báo lại; không tắt xác minh SSL."
+          }
+        },
+        {
+          "name": "4.2 Client B: đăng nhập (mật khẩu hiện tại)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Client B đăng nhập: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfTokenB'); pm.test('Role customer', () => pm.expect(pm.response.json().role).to.eql('customer')); }",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfTokenB}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrlB}}/api/auth/login",
+              "host": [
+                "{{baseUrlB}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Dùng resetPassword.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{resetPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4.3 Client B: Me trước khi đổi",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Client B Me: HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrlB}}/api/auth/me",
+              "host": [
+                "{{baseUrlB}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Mong đợi 200."
+          }
+        },
+        {
+          "name": "4.4 Client A: Me trước khi đổi",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Client A Me: HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Mong đợi 200 (phiên từ bước 3.6)."
+          }
+        },
+        {
+          "name": "4.5 Client A: đổi mật khẩu",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Đổi mật khẩu: HTTP 204', () => pm.response.to.have.status(204));",
+                  "if (pm.response.code === 204) pm.test('Cấp lại cookie cho client A', () => pm.expect(pm.response.headers.all().some(h => h.key.toLowerCase() === 'set-cookie' && h.value.startsWith('__Host-decakes.auth='))).to.eql(true));",
+                  "if (pm.response.code >= 400) { let p = {}; try { p = pm.response.json(); } catch (e) {} pm.test('Lỗi trả về: ' + (p.code || p.title || pm.response.code), () => pm.expect.fail('Xem body response; không dán token/mật khẩu vào chat.')); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/password/change",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "password",
+                "change"
+              ]
+            },
+            "description": "currentPassword = resetPassword, newPassword = changedPassword (khác hai mật khẩu trước). Mong đợi 204 và cookie đăng nhập mới cho client A.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{resetPassword}}\",\n  \"newPassword\": \"{{changedPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "4.6 Client A: Me sau khi đổi — vẫn đăng nhập",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Client A vẫn đăng nhập: HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Mong đợi 200."
+          }
+        },
+        {
+          "name": "4.7 Client B: Me sau khi đổi — phiên bị thu hồi",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Client B mất phiên: HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrlB}}/api/auth/me",
+              "host": [
+                "{{baseUrlB}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Mong đợi 401."
+          }
+        },
+        {
+          "name": "4.8 Client B: lấy CSRF mới",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('CSRF client B: HTTP 200', () => pm.response.to.have.status(200));",
+                  "if (pm.response.code === 200) pm.environment.set('csrfTokenB', pm.response.json().token);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrlB}}/api/auth/csrf",
+              "host": [
+                "{{baseUrlB}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "csrf"
+              ]
+            },
+            "description": "Client B đã thành ẩn danh nên cần CSRF mới."
+          }
+        },
+        {
+          "name": "4.9 Client B: đăng nhập bằng mật khẩu trước khi đổi phải thất bại",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Mật khẩu trước khi đổi bị từ chối: HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfTokenB}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrlB}}/api/auth/login",
+              "host": [
+                "{{baseUrlB}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Dùng resetPassword (mật khẩu trước khi đổi). Mong đợi 401.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{testEmail}}\",\n  \"password\": \"{{resetPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 — Kết thúc",
+      "description": "Đăng xuất client A. Tài khoản kiểm thử vẫn còn trên database (API không có thao tác xóa).",
+      "item": [
+        {
+          "name": "5.1 Client A: đăng xuất",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Đăng xuất: HTTP 204', () => pm.response.to.have.status(204));",
+                  "if (pm.response.code === 204) { for (const k of ['csrfToken', 'csrfTokenB', 'oldVerificationToken', 'verificationToken', 'resetToken']) pm.environment.unset(k); }"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Mong đợi 204. Sau đó xóa giá trị mật khẩu/token trong environment."
+          }
+        }
+      ]
+    }
+  ]
+}

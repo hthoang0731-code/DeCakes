@@ -18,7 +18,20 @@ public interface IUserAccountStore
     Task<bool> ReplacePasswordHashAsync(long id, string expectedCurrentHash, string newHash, CancellationToken cancellationToken);
 }
 
-public sealed record UserAccount(long Id, string Email, string FullName, string? Phone, string Role, string Status);
+/// <summary>
+/// <c>EmailVerified</c>: users.email_verified_at khác NULL. <c>SessionVersion</c>: users.session_version, tăng khi
+/// đổi/đặt lại mật khẩu để thu hồi mọi cookie đã cấp.
+/// </summary>
+public sealed record UserAccount(
+    long Id,
+    string Email,
+    string FullName,
+    string? Phone,
+    string Role,
+    string Status,
+    bool EmailVerified = false,
+    long SessionVersion = 0,
+    bool IsDemo = false);
 
 public sealed record UserCredentials(UserAccount Account, string? PasswordHash);
 

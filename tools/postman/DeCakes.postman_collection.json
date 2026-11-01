@@ -1,0 +1,3867 @@
+{
+  "info": {
+    "_postman_id": "39b01a42-7a48-4cff-9c81-3b4cb3f270d0",
+    "name": "DeCakes — API manual tests (2026-10-23)",
+    "description": "Bộ request thủ công theo mã hiện tại. Đọc README trong tools/postman trước khi chạy. Dùng HTTPS và cookie jar, không Bearer token. Request ghi mặc định bị chặn để bảo vệ Aiven chung. Không Run toàn bộ collection: các nhánh review/reset/remove là lựa chọn riêng. Chưa có Quotes/Orders API. Các response test là điều kiện mong đợi, không phải chứng nhận API đã được chạy.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "noauth"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Không gửi request ghi vào database chưa được xác nhận là môi trường kiểm thử riêng.",
+          "const base = String(pm.environment.get('baseUrl') || '').replace(/\\/$/, '');",
+          "if (!/^https:\\/\\/(localhost|127\\.0\\.0\\.1)(:\\d+)?$/.test(base)) {",
+          "  pm.execution.skipRequest(); throw new Error('baseUrl phải là origin HTTPS localhost, không có dấu / cuối. Xem README.');",
+          "}",
+          "if (!['GET', 'HEAD', 'OPTIONS'].includes(pm.request.method)) {",
+          "  if (pm.environment.get('writeRequestsEnabled') !== 'true' || pm.environment.get('databaseTarget') !== 'isolated-local') {",
+          "    pm.execution.skipRequest(); throw new Error('Request ghi đang tắt. Chỉ bật writeRequestsEnabled=true và databaseTarget=isolated-local sau khi API thực sự trỏ tới database kiểm thử riêng; localhost không chứng minh database là local.');",
+          "  }",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const expected = JSON.parse(pm.variables.get('_expectedStatus') || '[]');",
+          "if (expected.length) { pm.test('HTTP đúng cho kịch bản đã chọn: ' + expected.join('/'), function () { pm.expect(pm.response.code).to.be.oneOf(expected); }); }",
+          "if (pm.response.code >= 400) {",
+          "  pm.test('Không lộ chuỗi kết nối hoặc stack trace trong lỗi', function () {",
+          "    pm.expect(pm.response.text()).not.to.match(/(?:password_hash|MySqlException|at DeCakes\\.|Server=[^;]+;Port=)/i);",
+          "  });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "00 — Bắt đầu / session",
+      "description": "Chạy Health, OpenAPI, GET CSRF trước. Me chưa đăng nhập chỉ mong đợi 401 nếu cookie jar chưa có phiên.",
+      "item": [
+        {
+          "name": "Health",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/health",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "OpenAPI — Development",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/openapi/v1.json",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF — chạy sau mỗi login/logout",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Postman lưu cookie CSRF tự động. Token trả về được lưu vào biến csrfToken (secret); không in vào Console.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }",
+                  "pm.test('CSRF response có đúng header', function () { pm.expect(pm.response.json().headerName).to.equal('X-CSRF-TOKEN'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me — chưa đăng nhập",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/me",
+            "description": "Xóa cookie của localhost hoặc logout trước nếu đang có phiên. Không xóa cookie CSRF riêng để thử đăng xuất.\n\nMong đợi: HTTP 401. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[401]\");"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "01 — Catalog / gói công khai",
+      "description": "Các GET đọc database; V004 cần có để đọc gói. Catalog có thể rỗng; detail cần ID hợp lệ.",
+      "item": [
+        {
+          "name": "Danh sách tiệm công khai",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakeries?page=1&pageSize=20",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { const items = pm.response.json().items || []; if (items.length) pm.environment.set('catalogBakeryId', String(items[0].id)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chi tiết tiệm công khai",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakeries/{{catalogBakeryId}}",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"catalogBakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Danh sách mẫu bánh",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/cakes?page=1&pageSize=20",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { const items = pm.response.json().items || []; if (items.length) pm.environment.set('cakeId', String(items[0].id)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chi tiết mẫu bánh",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/cakes/{{cakeId}}",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"cakeId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Danh mục gói — lưu planId đầu tiên nếu chưa chọn",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/subscription-plans",
+            "description": "Không tạo gói. Nếu danh sách rỗng cần chuẩn bị danh mục trên môi trường kiểm thử. Giá null vẫn có thể chọn gói/trial, chưa checkout được.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { const items = pm.response.json(); if (Array.isArray(items) && items.length && !pm.environment.get('planId')) pm.environment.set('planId', String(items[0].id)); }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 — Customer / đăng ký và đăng nhập",
+      "description": "Dùng email riêng có thể nhận thư. Đăng ký không tự login. Sau login xác minh email qua folder 04 trước khi tạo/gửi DesignRequest.",
+      "item": [
+        {
+          "name": "Lấy CSRF — chạy sau mỗi login/logout",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Postman lưu cookie CSRF tự động. Token trả về được lưu vào biến csrfToken (secret); không in vào Console.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }",
+                  "pm.test('CSRF response có đúng header', function () { pm.expect(pm.response.json().headerName).to.equal('X-CSRF-TOKEN'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Đăng ký customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/register",
+            "description": "Mong đợi: HTTP 201. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{customerPassword}}\",\n  \"fullName\": \"Khách kiểm thử DeCakes\",\n  \"phone\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[201]\");",
+                  "for (const key of [\"customerEmail\",\"customerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"customerId\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Đăng nhập customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Cần GET CSRF trước. Login thành công thay cookie của role trước; token CSRF cũ bị xóa, lấy token mới trước request ghi tiếp theo. Một cookie jar dùng chung cho các role trên cùng domain.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{customerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"customerEmail\",\"customerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"customerId\", String(value)); }",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"role\"]; if (value !== undefined && value !== null) pm.environment.set(\"activeRole\", String(value)); }",
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.test('Đúng vai trò đăng nhập', function () { pm.expect(pm.response.json().role).to.equal(\"customer\"); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me — customer",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/me",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.test('Role customer', function () { pm.expect(pm.response.json().role).to.equal('customer'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF — chạy sau mỗi login/logout",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Postman lưu cookie CSRF tự động. Token trả về được lưu vào biến csrfToken (secret); không in vào Console.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }",
+                  "pm.test('CSRF response có đúng header', function () { pm.expect(pm.response.json().headerName).to.equal('X-CSRF-TOKEN'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 — Chủ tiệm / đăng ký và đăng nhập",
+      "description": "Đăng ký tạo owner + hồ sơ draft. Sau login cần xác minh email tại folder 04; tiếp tục hồ sơ tại folder 05.",
+      "item": [
+        {
+          "name": "Lấy CSRF — chạy sau mỗi login/logout",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Postman lưu cookie CSRF tự động. Token trả về được lưu vào biến csrfToken (secret); không in vào Console.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }",
+                  "pm.test('CSRF response có đúng header', function () { pm.expect(pm.response.json().headerName).to.equal('X-CSRF-TOKEN'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Đăng ký chủ tiệm",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/register-bakery",
+            "description": "Mong đợi: HTTP 201. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\",\n  \"fullName\": \"Chủ tiệm kiểm thử\",\n  \"phone\": null,\n  \"bakeryName\": \"Tiệm kiểm thử DeCakes\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[201]\");",
+                  "for (const key of [\"ownerEmail\",\"ownerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"bakeryId\"]; if (value !== undefined && value !== null) pm.environment.set(\"bakeryId\", String(value)); }",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"user\"][\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"ownerId\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Đăng nhập owner",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Cần GET CSRF trước. Login thành công thay cookie của role trước; token CSRF cũ bị xóa, lấy token mới trước request ghi tiếp theo. Một cookie jar dùng chung cho các role trên cùng domain.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"ownerEmail\",\"ownerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"ownerId\", String(value)); }",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"role\"]; if (value !== undefined && value !== null) pm.environment.set(\"activeRole\", String(value)); }",
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.test('Đúng vai trò đăng nhập', function () { pm.expect(pm.response.json().role).to.equal(\"bakery\"); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me — owner",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/me",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.test('Role bakery', function () { pm.expect(pm.response.json().role).to.equal('bakery'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF — chạy sau mỗi login/logout",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Postman lưu cookie CSRF tự động. Token trả về được lưu vào biến csrfToken (secret); không in vào Console.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }",
+                  "pm.test('CSRF response có đúng header', function () { pm.expect(pm.response.json().headerName).to.equal('X-CSRF-TOKEN'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 — Email / áp dụng user đang đăng nhập",
+      "description": "Token lấy từ email thật đã được cấu hình, chỉ dán phần sau #token= vào verificationToken trong giá trị cục bộ. Không đọc token từ DB (chỉ có digest). Không chạy confirm khi chưa có token.",
+      "item": [
+        {
+          "name": "Gửi lại email xác minh",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/email-verification/resend",
+            "description": "Chỉ mong đợi 202 khi gửi được. Có thể gặp 429 do mới gửi sau register hoặc 503 EMAIL_DELIVERY_UNAVAILABLE khi chưa cấu hình dịch vụ. Đây không phải ca thành công của collection.\n\nMong đợi: HTTP 202. Chỉ chạy trên database kiểm thử riêng. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[202]\");",
+                  "for (const key of [\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Xác minh email",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/email-verification/confirm",
+            "description": "Mong đợi: HTTP 204. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{verificationToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[204]\");",
+                  "for (const key of [\"verificationToken\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 204) pm.environment.unset('verificationToken');"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me — kiểm tra emailVerified",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/me",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.test('Email đã xác minh', function () { pm.expect(pm.response.json().emailVerified).to.equal(true); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "05 — Owner / hồ sơ và gửi duyệt",
+      "description": "Cần login owner, lấy CSRF mới. Gói và email xác minh phải sẵn trước submit. Chỉ sửa profile khi draft.",
+      "item": [
+        {
+          "name": "Đăng nhập owner",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Cần GET CSRF trước. Login thành công thay cookie của role trước; token CSRF cũ bị xóa, lấy token mới trước request ghi tiếp theo. Một cookie jar dùng chung cho các role trên cùng domain.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"ownerEmail\",\"ownerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"ownerId\", String(value)); }",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"role\"]; if (value !== undefined && value !== null) pm.environment.set(\"activeRole\", String(value)); }",
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.test('Đúng vai trò đăng nhập', function () { pm.expect(pm.response.json().role).to.equal(\"bakery\"); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF — chạy sau mỗi login/logout",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Postman lưu cookie CSRF tự động. Token trả về được lưu vào biến csrfToken (secret); không in vào Console.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }",
+                  "pm.test('CSRF response có đúng header', function () { pm.expect(pm.response.json().headerName).to.equal('X-CSRF-TOKEN'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hồ sơ tiệm của owner",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/profile",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lưu hồ sơ draft",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/profile",
+            "description": "Mong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Tiệm kiểm thử DeCakes\",\n  \"description\": \"Hồ sơ kiểm thử trên môi trường riêng.\",\n  \"addressLine\": \"123 Đường Kiểm Thử\",\n  \"city\": \"TP. Hồ Chí Minh\",\n  \"phone\": \"0900000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chọn gói",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/subscription/plan",
+            "description": "Mong đợi: HTTP 204. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"planId\": \"{{planId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[204]\");",
+                  "for (const key of [\"bakeryId\",\"planId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "for (const key of [\"planId\"]) { const n = Number(payload[key]); if (!Number.isSafeInteger(n) || n <= 0) { pm.execution.skipRequest(); throw new Error(key + ' phải là ID nguyên dương trong phạm vi JS safe integer.'); } payload[key] = n; }",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Gửi hồ sơ duyệt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/profile/submit",
+            "description": "Mong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.test('Hồ sơ pending_review', function () { pm.expect(pm.response.json().profileStatus).to.equal('pending_review'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lịch sử review — góc nhìn tiệm",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/reviews",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "06 — Admin / tra cứu và duyệt",
+      "description": "Không có đăng ký admin public. Cần tài khoản admin của môi trường kiểm thử do công cụ vận hành chuẩn bị. Approve/request_changes/reject là các nhánh loại trừ nhau: chọn một, KHÔNG chạy cả folder bằng Runner.",
+      "item": [
+        {
+          "name": "Đăng nhập admin",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Cần GET CSRF trước. Login thành công thay cookie của role trước; token CSRF cũ bị xóa, lấy token mới trước request ghi tiếp theo. Một cookie jar dùng chung cho các role trên cùng domain.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{adminEmail}}\",\n  \"password\": \"{{adminPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"adminEmail\",\"adminPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"adminUserId\", String(value)); }",
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"role\"]; if (value !== undefined && value !== null) pm.environment.set(\"activeRole\", String(value)); }",
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.test('Đúng vai trò đăng nhập', function () { pm.expect(pm.response.json().role).to.equal(\"admin\"); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF — chạy sau mỗi login/logout",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Postman lưu cookie CSRF tự động. Token trả về được lưu vào biến csrfToken (secret); không in vào Console.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }",
+                  "pm.test('CSRF response có đúng header', function () { pm.expect(pm.response.json().headerName).to.equal('X-CSRF-TOKEN'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me — admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/me",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.test('Role admin', function () { pm.expect(pm.response.json().role).to.equal('admin'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/dashboard",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Danh sách users",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/users?page=1&pageSize=20",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chi tiết customer kiểm thử",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/users/{{customerId}}",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"customerId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tiệm đang chờ duyệt",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/bakeries?profileStatus=pending_review&page=1&pageSize=20",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chi tiết tiệm — admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/bakeries/{{bakeryId}}",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "APPROVE — chọn nhánh này để đi tiếp trial",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/bakeries/{{bakeryId}}/review",
+            "description": "Cấp trial một lần từ lúc duyệt. Sau approve không chạy hai nhánh còn lại với cùng hồ sơ.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"approve\",\n  \"reason\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "REQUEST CHANGES — nhánh thay thế approve",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/bakeries/{{bakeryId}}/review",
+            "description": "Sau bước này owner sửa draft và submit lại. Không chạy trên hồ sơ đã approve.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"request_changes\",\n  \"reason\": \"Bổ sung địa chỉ tiệm rõ ràng.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "REJECT — nhánh kết thúc hồ sơ",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/bakeries/{{bakeryId}}/review",
+            "description": "Hồ sơ rejected không gửi lại được. Dùng một hồ sơ kiểm thử riêng để thử nhánh này.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"reject\",\n  \"reason\": \"Hồ sơ không đáp ứng điều kiện kiểm thử.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lịch sử review — admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/bakeries/{{bakeryId}}/reviews",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "07 — Owner / trial và lời mời staff",
+      "description": "Quay lại owner sau admin. Trial có sau approve; email phải xác minh để mời. Cần dịch vụ email thật để nhận token lời mời.",
+      "item": [
+        {
+          "name": "Đăng nhập owner",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Lấy CSRF bằng folder 00 trước nếu biến đang trống. Sau login, chạy GET CSRF mới.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"ownerEmail\",\"ownerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.environment.set('activeRole', pm.response.json().role); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Các tiệm tôi là thành viên",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Trạng thái gói và trial",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/subscription",
+            "description": "Ca này mong đợi đã approve. Trước approve hoặc sau hết hạn accessActive=false là đúng, không phải lỗi API.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) pm.test('Sau approve có quyền gói còn hạn', function () { pm.expect(pm.response.json().accessActive).to.equal(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Danh sách thành viên — owner",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/members",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mời staff",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/invitations",
+            "description": "Có thể 201 nhưng emailDelivered=false nếu chưa cấu hình email; lúc đó đã tạo lời mời nhưng chưa có luồng nhận thư thành công. Không có raw token trong response.\n\nMong đợi: HTTP 201. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{staffEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[201]\");",
+                  "for (const key of [\"bakeryId\",\"staffEmail\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"invitation\"][\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"invitationId\", String(value)); }",
+                  "if (pm.response.code === 201) pm.test('Email lời mời đã được gửi', function () { pm.expect(pm.response.json().emailDelivered).to.equal(true); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Danh sách lời mời đang mở",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/invitations",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "08 — Staff / nhận lời mời và kiểm tra quyền",
+      "description": "accept-new và accept là hai nhánh thay thế. Dùng accept-new nếu email staff chưa có tài khoản. Token lấy từ link email; không đăng ký staff bằng register-bakery (sẽ tạo owner/tiệm mới).",
+      "item": [
+        {
+          "name": "Đăng xuất owner trước nhánh accept-new",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/logout",
+            "description": "Mong đợi: HTTP 204. Chỉ chạy trên database kiểm thử riêng. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[204]\");",
+                  "for (const key of [\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 204) { pm.environment.unset('csrfToken'); pm.environment.unset('activeRole'); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "ACCEPT NEW — tạo tài khoản staff từ lời mời",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/invitations/accept-new",
+            "description": "Tạo account bakery và membership staff; không tự login. Không chạy nhánh accept bên dưới với cùng token đã dùng.\n\nMong đợi: HTTP 201. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{invitationToken}}\",\n  \"password\": \"{{staffPassword}}\",\n  \"fullName\": \"Nhân viên kiểm thử\",\n  \"phone\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[201]\");",
+                  "for (const key of [\"invitationToken\",\"staffPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"userId\"]; if (value !== undefined && value !== null) pm.environment.set(\"staffUserId\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Đăng nhập staff",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Lấy CSRF bằng folder 00 trước nếu biến đang trống. Sau login, chạy GET CSRF mới.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{staffEmail}}\",\n  \"password\": \"{{staffPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"staffEmail\",\"staffPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.environment.set('activeRole', pm.response.json().role); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me — staff",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/me",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"staffUserId\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "ACCEPT EXISTING — nhánh thay thế, user bakery đã có",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/invitations/accept",
+            "description": "Chỉ dùng nếu nhận một lời mời mới bằng tài khoản bakery có sẵn, đúng email. Bỏ qua khi vừa dùng accept-new.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{invitationToken}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"invitationToken\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"userId\"]; if (value !== undefined && value !== null) pm.environment.set(\"staffUserId\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tiệm tôi tham gia — staff",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Staff không được xem danh sách thành viên quản trị",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/members",
+            "description": "Mong đợi: HTTP 403. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[403]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 403) pm.test('OWNER_REQUIRED', function () { pm.expect(pm.response.json().code).to.equal('OWNER_REQUIRED'); });"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "09 — Customer / DesignRequests",
+      "description": "Cần customer đã xác minh và tiệm active có kỳ sử dụng hợp lệ để gửi. Chạy update trước send vì chỉ draft được sửa. Sau send request chuyển open, update sau đó phải 409.",
+      "item": [
+        {
+          "name": "Đăng nhập customer",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Lấy CSRF bằng folder 00 trước nếu biến đang trống. Sau login, chạy GET CSRF mới.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{customerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"customerEmail\",\"customerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.environment.set('activeRole', pm.response.json().role); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tạo yêu cầu draft",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/design-requests",
+            "description": "Mong đợi: HTTP 201. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Bánh sinh nhật kiểm thử\",\n  \"ideaDescription\": \"Bánh kem ít ngọt, tông xanh, kiểm thử trên database riêng.\",\n  \"budgetMin\": 500000,\n  \"budgetMax\": 900000,\n  \"sizeDescription\": \"Bánh tròn 20 cm\",\n  \"servings\": 10,\n  \"flavor\": \"Chocolate\",\n  \"inscriptionText\": \"Chúc mừng sinh nhật\",\n  \"pickupAt\": \"{{pickupAt}}\",\n  \"inspiredByCakeId\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[201]\");",
+                  "for (const key of [\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "if (!pm.environment.get('pickupAt')) pm.variables.set('pickupAt', new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString());",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"id\"]; if (value !== undefined && value !== null) pm.environment.set(\"requestId\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Danh sách yêu cầu của tôi",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/design-requests?page=1&pageSize=20",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chi tiết yêu cầu",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/design-requests/{{requestId}}",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"requestId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sửa yêu cầu khi còn draft",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/design-requests/{{requestId}}",
+            "description": "Mong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Bánh sinh nhật kiểm thử đã sửa\",\n  \"ideaDescription\": \"Bánh kem ít ngọt, tông xanh, kiểm thử trên database riêng.\",\n  \"budgetMin\": 500000,\n  \"budgetMax\": 900000,\n  \"sizeDescription\": \"Bánh tròn 20 cm\",\n  \"servings\": 10,\n  \"flavor\": \"Chocolate\",\n  \"inscriptionText\": \"Chúc mừng sinh nhật\",\n  \"pickupAt\": \"{{pickupAt}}\",\n  \"inspiredByCakeId\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"requestId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "if (!pm.environment.get('pickupAt')) pm.variables.set('pickupAt', new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString());",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Gửi yêu cầu tới tiệm đã duyệt",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/design-requests/{{requestId}}/bakeries/{{bakeryId}}",
+            "description": "CALL procedure ghi dữ liệu, chỉ database kiểm thử riêng. Tiệm phải active và có trial/paid còn hạn; gửi trùng sẽ 409.\n\nMong đợi: HTTP 201. Chỉ chạy trên database kiểm thử riêng. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[201]\");",
+                  "for (const key of [\"requestId\",\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Các tiệm đã nhận yêu cầu",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/design-requests/{{requestId}}/bakeries",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"requestId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sửa sau khi đã gửi phải bị chặn",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/design-requests/{{requestId}}",
+            "description": "Mong đợi: HTTP 409. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Không được sửa sau khi gửi\",\n  \"ideaDescription\": \"Bánh kem ít ngọt, tông xanh, kiểm thử trên database riêng.\",\n  \"budgetMin\": 500000,\n  \"budgetMax\": 900000,\n  \"sizeDescription\": \"Bánh tròn 20 cm\",\n  \"servings\": 10,\n  \"flavor\": \"Chocolate\",\n  \"inscriptionText\": \"Chúc mừng sinh nhật\",\n  \"pickupAt\": \"{{pickupAt}}\",\n  \"inspiredByCakeId\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[409]\");",
+                  "for (const key of [\"requestId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "if (!pm.environment.get('pickupAt')) pm.variables.set('pickupAt', new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString());",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "10 — Tiệm / đọc inbox",
+      "description": "Login owner hoặc staff có membership active. GET không đổi trạng thái lần gửi.",
+      "item": [
+        {
+          "name": "Đăng nhập owner",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Lấy CSRF bằng folder 00 trước nếu biến đang trống. Sau login, chạy GET CSRF mới.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"ownerEmail\",\"ownerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.environment.set('activeRole', pm.response.json().role); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inbox của tiệm",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/requests?page=1&pageSize=20",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chi tiết yêu cầu đã gửi tới tiệm",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/requests/{{requestId}}",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\",\"requestId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Inbox lọc trạng thái",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/requests?status=pending&requestStatus=open&page=1&pageSize=20",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Không đọc được tiệm không có membership",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{otherBakeryId}}/requests?page=1&pageSize=20",
+            "description": "Điền ID tiệm kiểm thử khác mà user hiện tại không là thành viên; không dùng ID tùy ý có thể thuộc user.\n\nMong đợi: HTTP 404. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[404]\");",
+                  "for (const key of [\"otherBakeryId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "11 — Gói / cổng thanh toán đang TẮT",
+      "description": "Không tạo giao dịch hay gọi payOS thật. Checkout default kiểm tra cấu hình cổng trước dữ liệu giá, vì vậy mong đợi 503 khi Payments:PayOS:Enabled=false; không mặc định đòi 409 PLAN_NOT_PRICED.",
+      "item": [
+        {
+          "name": "Đăng nhập owner",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Lấy CSRF bằng folder 00 trước nếu biến đang trống. Sau login, chạy GET CSRF mới.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"ownerEmail\",\"ownerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.environment.set('activeRole', pm.response.json().role); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Checkout tháng — cổng chưa bật",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/subscription/checkout",
+            "description": "Mong đợi: HTTP 503. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"billingCycle\": \"month\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[503]\");",
+                  "for (const key of [\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 503) pm.test('PAYMENT_NOT_CONFIGURED', function () { pm.expect(pm.response.json().code).to.equal('PAYMENT_NOT_CONFIGURED'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Checkout năm — cổng chưa bật",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/subscription/checkout",
+            "description": "Mong đợi: HTTP 503. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"billingCycle\": \"year\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[503]\");",
+                  "for (const key of [\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Chu kỳ sai phải 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/subscription/checkout",
+            "description": "Mong đợi: HTTP 400. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"billingCycle\": \"week\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[400]\");",
+                  "for (const key of [\"bakeryId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Tra cứu giao dịch — khi đã có paymentId",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/subscription/payments/{{paymentId}}",
+            "description": "Không có paymentId khi cổng tắt và chưa tạo giao dịch. Bỏ qua request này; không bịa ID để mong đợi 200.\n\nMong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"bakeryId\",\"paymentId\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Webhook khi cổng chưa bật",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/payments/payos/webhook",
+            "description": "Dữ liệu cố ý không có chữ ký hợp lệ. Chỉ thử cấu hình cổng đang tắt: 503, không cấp quyền. Khi cổng bật, payload này phải bị từ chối, không dùng làm mẫu webhook thành công.\n\nMong đợi: HTTP 503. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"00\",\n  \"desc\": \"success\",\n  \"success\": true,\n  \"data\": {\n    \"orderCode\": 1,\n    \"amount\": 1,\n    \"currency\": \"VND\"\n  },\n  \"signature\": \"invalid-manual-test-only\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[503]\");",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "12 — Mật khẩu / chạy riêng sau flow chính",
+      "description": "Các request thay mật khẩu làm đổi trạng thái tài khoản/phiên. Điền recoveryEmail/newPassword/currentPassword của đúng người. Sau đổi/reset, sửa biến password tương ứng trước login lần sau.",
+      "item": [
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Quên mật khẩu",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/password/forgot",
+            "description": "202 cho cả email không tồn tại hoặc gửi email thất bại, không chứng minh thư đã đến. Cần mở hộp thư thực tế lấy resetToken.\n\nMong đợi: HTTP 202. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{recoveryEmail}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[202]\");",
+                  "for (const key of [\"recoveryEmail\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Đặt lại mật khẩu bằng token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/password/reset",
+            "description": "Thu hồi mọi phiên user, không auto login. Sau reset lấy CSRF mới rồi login bằng mật khẩu mới; CSRF request có cookie phiên cũ bị thu hồi có thể gây 400, xóa cookie localhost nếu cần.\n\nMong đợi: HTTP 204. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"{{resetToken}}\",\n  \"newPassword\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[204]\");",
+                  "for (const key of [\"resetToken\",\"newPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 204) { pm.environment.unset('resetToken'); pm.environment.unset('csrfToken'); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Đổi mật khẩu user đang đăng nhập",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/password/change",
+            "description": "Login đúng user và lấy CSRF trước. Giữ phiên hiện tại bằng cookie mới, các phiên khác bị thu hồi. Cập nhật biến password đúng role sau khi thành công.\n\nMong đợi: HTTP 204. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"{{currentPassword}}\",\n  \"newPassword\": \"{{newPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[204]\");",
+                  "for (const key of [\"currentPassword\",\"newPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 204) pm.environment.unset('csrfToken');"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "13 — Ca lỗi / chạy có chọn lọc",
+      "description": "Chỉ chạy ca đúng điều kiện mô tả. Không chạy hàng loạt gây rate limit hoặc trộn session các role.",
+      "item": [
+        {
+          "name": "Login thiếu CSRF phải 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Mong đợi: HTTP 400. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"{{customerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[400]\");",
+                  "for (const key of [\"customerEmail\",\"customerPassword\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sai mật khẩu phải 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Mong đợi: HTTP 401. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{customerEmail}}\",\n  \"password\": \"This-is-deliberately-not-the-test-password-1023\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[401]\");",
+                  "for (const key of [\"customerEmail\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Customer chưa xác minh không tạo được yêu cầu",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/design-requests",
+            "description": "Chỉ chạy khi đang login customer MỚI chưa xác minh. Không chạy với customer đã xác minh vì lúc đó có thể tạo draft mới.\n\nMong đợi: HTTP 403. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Bánh sinh nhật kiểm thử\",\n  \"ideaDescription\": \"Bánh kem ít ngọt, tông xanh, kiểm thử trên database riêng.\",\n  \"budgetMin\": 500000,\n  \"budgetMax\": 900000,\n  \"sizeDescription\": \"Bánh tròn 20 cm\",\n  \"servings\": 10,\n  \"flavor\": \"Chocolate\",\n  \"inscriptionText\": \"Chúc mừng sinh nhật\",\n  \"pickupAt\": \"{{pickupAt}}\",\n  \"inspiredByCakeId\": null\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[403]\");",
+                  "for (const key of [\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "if (!pm.environment.get('pickupAt')) pm.variables.set('pickupAt', new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString());",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 403) pm.test('EMAIL_NOT_VERIFIED', function () { pm.expect(pm.response.json().code).to.equal('EMAIL_NOT_VERIFIED'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Bakery không truy cập Admin",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/admin/dashboard",
+            "description": "Cần login owner/staff, không dùng admin hoặc anonymous.\n\nMong đợi: HTTP 403. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[403]\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Token xác minh sai phải 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/email-verification/confirm",
+            "description": "Mong đợi: HTTP 400. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"token\": \"not-a-valid-token\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[400]\");",
+                  "for (const key of [\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 400) pm.test('TOKEN_INVALID', function () { pm.expect(pm.response.json().code).to.equal('TOKEN_INVALID'); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Phân trang Catalog sai phải 400",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakeries?page=0&pageSize=20",
+            "description": "Mong đợi: HTTP 400. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[400]\");"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "14 — Kết thúc / thu hồi membership (tùy chọn)",
+      "description": "Thao tác gỡ staff/revoke lời mời làm thay đổi quyền; chỉ chạy cuối flow, không dùng lời mời vừa nhận để thử revoke thành công.",
+      "item": [
+        {
+          "name": "Đăng nhập owner",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/login",
+            "description": "Lấy CSRF bằng folder 00 trước nếu biến đang trống. Sau login, chạy GET CSRF mới.\n\nMong đợi: HTTP 200. Chỉ chạy trên database kiểm thử riêng. ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{ownerEmail}}\",\n  \"password\": \"{{ownerPassword}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");",
+                  "for (const key of [\"ownerEmail\",\"ownerPassword\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }",
+                  "const template = JSON.parse(pm.request.body.raw);",
+                  "function resolve(value) { if (typeof value === 'string') return pm.variables.replaceIn(value); if (Array.isArray(value)) return value.map(resolve); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v]) => [k,resolve(v)])); return value; }",
+                  "const payload = resolve(template);",
+                  "pm.request.body.update(JSON.stringify(payload));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) { pm.environment.unset('csrfToken'); pm.environment.set('activeRole', pm.response.json().role); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Hủy lời mời còn mở",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/invitations/{{invitationId}}",
+            "description": "Chỉ áp dụng lời mời CHƯA nhận và chưa thu hồi; nếu đã nhận có thể 404, không phải ca thành công.\n\nMong đợi: HTTP 204. Chỉ chạy trên database kiểm thử riêng. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[204]\");",
+                  "for (const key of [\"bakeryId\",\"invitationId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Gỡ staff khỏi tiệm",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/bakery-workspace/bakeries/{{bakeryId}}/members/{{staffUserId}}",
+            "description": "Giữ bản ghi membership nhưng đổi removed. Không truyền ownerId.\n\nMong đợi: HTTP 204. Chỉ chạy trên database kiểm thử riêng. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[204]\");",
+                  "for (const key of [\"bakeryId\",\"staffUserId\",\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Đăng xuất",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "X-CSRF-TOKEN",
+                "value": "{{csrfToken}}"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/logout",
+            "description": "Mong đợi: HTTP 204. Chỉ chạy trên database kiểm thử riêng. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[204]\");",
+                  "for (const key of [\"csrfToken\"]) { if (!String(pm.environment.get(key) || '').trim()) { pm.execution.skipRequest(); throw new Error('Thiếu biến ' + key + '. Xem README; không điền bí mật vào file trong Git.'); } }"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 204) { pm.environment.unset('csrfToken'); pm.environment.unset('activeRole'); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Lấy CSRF mới",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/csrf",
+            "description": "Mong đợi: HTTP 200. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[200]\");"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code >= 200 && pm.response.code < 300) { const value = pm.response.json()[\"token\"]; if (value !== undefined && value !== null) pm.environment.set(\"csrfToken\", String(value)); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Me sau logout phải 401",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/api/auth/me",
+            "description": "Mong đợi: HTTP 401. "
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('_expectedStatus', \"[401]\");"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

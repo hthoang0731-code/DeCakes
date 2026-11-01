@@ -7,7 +7,7 @@ namespace DeCakes.Infrastructure.Tests.MySql;
 // Mỗi test có database riêng: các ca phân trang không phụ thuộc dữ liệu hoặc thứ tự chạy ca khác.
 public class MySqlBakeryCatalogStoreTests : IAsyncLifetime
 {
-    private readonly MySqlTestDatabase _database = new();
+    private readonly MySqlTestDatabase _database = new() { CatalogReadOnly = true };
 
     private MySqlBakeryCatalogStore Store => new(_database.Factory);
 

@@ -19,6 +19,12 @@ public sealed class AntiforgeryValidationFilter(IAntiforgery antiforgery) : IAsy
             return;
         }
 
+        // Ngoại lệ duy nhất: webhook server-to-server xác thực bằng chữ ký trong chính action (xem SignedWebhookAttribute).
+        if (context.ActionDescriptor.EndpointMetadata.OfType<SignedWebhookAttribute>().Any())
+        {
+            return;
+        }
+
         try
         {
             await antiforgery.ValidateRequestAsync(context.HttpContext);

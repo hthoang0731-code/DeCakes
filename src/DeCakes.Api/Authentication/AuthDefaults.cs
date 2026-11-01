@@ -11,6 +11,12 @@ public static class AuthDefaults
 
     public const string AuthRateLimitPolicy = "auth";
 
+    // Quên/đặt lại mật khẩu, xác minh email: giới hạn theo IP chặt hơn, riêng với đăng nhập.
+    public const string RecoveryRateLimitPolicy = "auth-recovery";
+
+    // users.session_version lúc cấp cookie; lệch với database thì cookie bị từ chối (đổi/đặt lại mật khẩu).
+    public const string SessionVersionClaim = "decakes:sv";
+
     // Khóa HttpContext.Items chứa UserDto đã kiểm tra trong request hiện tại.
     public const string CurrentUserItemKey = "DeCakes.CurrentUser";
 }

@@ -17,6 +17,13 @@ public sealed class AuthRateLimitOptions
     public int WindowSeconds { get; set; } = 60;
 }
 
+public sealed class RecoveryRateLimitOptions
+{
+    public int PermitLimit { get; set; } = 5;
+
+    public int WindowSeconds { get; set; } = 300;
+}
+
 public static class AuthenticationSetup
 {
     public static IServiceCollection AddDeCakesAuthentication(this IServiceCollection services, IConfiguration configuration)
@@ -70,8 +77,21 @@ public static class AuthenticationSetup
         });
 
         services.Configure<AuthRateLimitOptions>(configuration.GetSection("Auth:RateLimit"));
+        services.Configure<RecoveryRateLimitOptions>(configuration.GetSection("Auth:RecoveryRateLimit"));
         services.AddRateLimiter(options =>
         {
+            options.AddPolicy(AuthDefaults.RecoveryRateLimitPolicy, httpContext =>
+            {
+                var limits = httpContext.RequestServices.GetRequiredService<IOptions<RecoveryRateLimitOptions>>().Value;
+                return RateLimitPartition.GetFixedWindowLimiter(
+                    httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = limits.PermitLimit,
+                        Window = TimeSpan.FromSeconds(limits.WindowSeconds),
+                        QueueLimit = 0,
+                    });
+            });
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
             // Giới hạn theo IP cho register/login. Sau reverse proxy cần cấu hình ForwardedHeaders để có IP thật.
             options.AddPolicy(AuthDefaults.AuthRateLimitPolicy, httpContext =>
@@ -121,23 +141,26 @@ public static class AuthenticationSetup
             return;
         }
 
+        // Cookie cấp trước khi có claim session version (không có hoặc sai định dạng) bị từ chối: đăng nhập lại một lần.
         var principal = context.Principal;
         var roleClaim = principal?.FindFirstValue(ClaimTypes.Role);
-        if (!long.TryParse(principal?.FindFirstValue(ClaimTypes.NameIdentifier), out var userId) || roleClaim is null)
+        if (!long.TryParse(principal?.FindFirstValue(ClaimTypes.NameIdentifier), out var userId)
+            || roleClaim is null
+            || !long.TryParse(principal?.FindFirstValue(AuthDefaults.SessionVersionClaim), out var sessionVersion))
         {
             await RejectAsync(context);
             return;
         }
 
         var accounts = context.HttpContext.RequestServices.GetRequiredService<IAccountService>();
-        var user = await accounts.GetActiveUserAsync(userId, context.HttpContext.RequestAborted);
-        if (user is null || user.Role != roleClaim)
+        var session = await accounts.GetSessionAsync(userId, context.HttpContext.RequestAborted);
+        if (session is null || session.User.Role != roleClaim || session.SessionVersion != sessionVersion)
         {
             await RejectAsync(context);
             return;
         }
 
-        context.HttpContext.Items[AuthDefaults.CurrentUserItemKey] = user;
+        context.HttpContext.Items[AuthDefaults.CurrentUserItemKey] = session.User;
     }
 
     private static async Task RejectAsync(CookieValidatePrincipalContext context)
@@ -146,11 +169,12 @@ public static class AuthenticationSetup
         await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
     }
 
-    public static ClaimsPrincipal CreatePrincipal(UserDto user) =>
+    public static ClaimsPrincipal CreatePrincipal(UserDto user, long sessionVersion) =>
         new(new ClaimsIdentity(
             [
                 new Claim(ClaimTypes.NameIdentifier, user.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 new Claim(ClaimTypes.Role, user.Role),
+                new Claim(AuthDefaults.SessionVersionClaim, sessionVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
             ],
             CookieAuthenticationDefaults.AuthenticationScheme,
             ClaimTypes.NameIdentifier,

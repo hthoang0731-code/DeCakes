@@ -1,8 +1,8 @@
 # Database DeCakes
 
-Các script SQL của `decakes_db` (MySQL 8.4, Aiven), schema phiên bản 2. Đây là bản sao nguyên vẹn từ gói đã sửa `DeCakes_DB_v2_da_test_Aiven.zip` của nhóm. Nội dung và byte được giữ nguyên (đối chiếu SHA-256 khi sao chép).
+Các script SQL gốc của `decakes_db` (MySQL 8.4, Aiven) bắt đầu từ schema phiên bản 2. Bản gốc từ `DeCakes_DB_v2_da_test_Aiven.zip` giữ nguyên byte; các migration V003–V005 là phần bổ sung sau đó. **Aiven đã lên version 5 ngày 31/10/2026**, có 17 bảng và 12 procedure. Xem [báo cáo triển khai](../docs/AIVEN_DEPLOYMENT_2026-10-31.md).
 
-> **Cảnh báo.** Database `decakes_db` trên Aiven **đã được cài và kiểm thử**. Không chạy lại script cài mới (`install/*`) hay migration trên database đó. Các script ở đây để tham chiếu, đọc hiểu và dựng database thử riêng, không phải để chạy lại trên database hiện có. Tài liệu này không đưa lệnh nào có thể thay đổi database.
+> **Cảnh báo.** Database `decakes_db` trên Aiven đã cài và áp dụng V003–V005 theo yêu cầu riêng của người dùng. Không chạy lại `install/*`, V002 hay V003–V005 trên database đó. Mọi thay đổi tiếp theo cần migration và phạm vi triển khai riêng; API không tự áp dụng migration khi khởi động.
 
 ## Tài liệu nên đọc
 
@@ -23,6 +23,9 @@ Hai tài liệu SCHEMA và STORED_PROCEDURES lập từ các file SQL bên dư�
 | Cài mới | `install/02_procedures.sql` | Xóa rồi tạo lại 11 procedure |
 | Dữ liệu demo | `install/03_seed_demo.sql` | Dữ liệu hư cấu; chỉ chạy một lần trên database mới |
 | Migration | `migrations/V002__order_snapshot_quote_revisions.sql` | Nâng schema v1 lên v2 và giữ dữ liệu. Không dùng cho database đã ở v2 |
+| Migration **đã áp dụng 31/10/2026** | `migrations/V003__account_security.sql` (+ `.grants.sql`) | Xác minh email, token khôi phục mật khẩu, session version |
+| Migration **đã áp dụng 31/10/2026** | `migrations/V004__bakery_onboarding.sql` (+ `.grants.sql`) | `rejected`, lịch sử review, gói, kỳ sử dụng/trial, lời mời staff |
+| Migration **đã áp dụng 31/10/2026** | `migrations/V005__subscription_payments.sql` (+ `.grants.sql`) | Giao dịch phí sử dụng, kỳ trả phí, guard quyền gói trong 4 procedure. Hai tiệm active cũ chưa có kỳ đang bị chặn giao dịch mới |
 | Quyền backend | `security/app_user_grants.sql` | Tùy chọn. Cấp quyền cho tài khoản MySQL mới của backend, không dùng cho tài khoản quản trị |
 | Kiểm thử | `tests/10_single_connection_tests.sql` | Bộ kiểm thử một connection, chỉ chạy trên database thử |
 | Kiểm thử | `tests/20_concurrency_setup.sql` | Chuẩn bị dữ liệu cho kiểm thử đồng thời làm tay |
@@ -37,4 +40,4 @@ Chỉ có file `.sql` được đưa vào repository. Hướng dẫn cài đặt
 - `security/app_user_grants.sql` chứa chỗ giữ mật khẩu dạng chú thích (`<nhập khi chạy>`); không thay bằng mật khẩu thật.
 - Không dùng `avnadmin` hay tài khoản quản trị làm tài khoản kết nối lâu dài của backend.
 - Không sửa nội dung các script đã sao chép. Nếu schema hoặc procedure cần đổi, tạo migration mới và thống nhất trong nhóm trước.
-- Trạng thái database thật (đã cài đúng v2, đã áp dụng script quyền hay chưa) chưa được xác minh trong repository này.
+- Ngày 31/10/2026 đã xác minh Aiven có versions 1–5 và grants bổ sung cho `decakes_app`/`decakes_app_member2`. Chú thích “đề xuất/chưa áp dụng” trong SQL là trạng thái lúc soạn; không sửa SQL nguồn sau triển khai. SCHEMA/STORED_PROCEDURES ban đầu mô tả v2, cần đọc cùng các migration và báo cáo triển khai.
