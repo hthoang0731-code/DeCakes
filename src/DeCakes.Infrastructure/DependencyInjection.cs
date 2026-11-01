@@ -5,6 +5,7 @@ using DeCakes.Application.Bakeries;
 using DeCakes.Application.BakeryWorkspace;
 using DeCakes.Application.Cakes;
 using DeCakes.Application.DesignRequests;
+using DeCakes.Application.Orders;
 using DeCakes.Application.Quotes;
 using DeCakes.Infrastructure.Accounts;
 using DeCakes.Application.BakeryOnboarding;
@@ -13,6 +14,7 @@ using DeCakes.Infrastructure.BakeryOnboarding;
 using DeCakes.Infrastructure.BakeryWorkspace;
 using DeCakes.Infrastructure.Cakes;
 using DeCakes.Infrastructure.DesignRequests;
+using DeCakes.Infrastructure.Orders;
 using DeCakes.Infrastructure.Quotes;
 using DeCakes.Infrastructure.Email;
 using DeCakes.Application.Subscriptions;
@@ -45,6 +47,7 @@ public static class DependencyInjection
         services.AddScoped<ICakeCatalogStore, MySqlCakeCatalogStore>();
         services.AddScoped<IDesignRequestStore, MySqlDesignRequestStore>();
         services.AddScoped<IQuoteStore, MySqlQuoteStore>();
+        services.AddScoped<IOrderStore, MySqlOrderStore>();
         services.AddScoped<IBakeryWorkspaceStore, MySqlBakeryWorkspaceStore>();
         return services;
     }

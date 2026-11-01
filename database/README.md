@@ -26,6 +26,7 @@ Hai tài liệu SCHEMA và STORED_PROCEDURES lập từ các file SQL bên dư�
 | Migration **đã áp dụng 31/10/2026** | `migrations/V003__account_security.sql` (+ `.grants.sql`) | Xác minh email, token khôi phục mật khẩu, session version |
 | Migration **đã áp dụng 31/10/2026** | `migrations/V004__bakery_onboarding.sql` (+ `.grants.sql`) | `rejected`, lịch sử review, gói, kỳ sử dụng/trial, lời mời staff |
 | Migration **đã áp dụng 31/10/2026** | `migrations/V005__subscription_payments.sql` (+ `.grants.sql`) | Giao dịch phí sử dụng, kỳ trả phí, guard quyền gói trong 4 procedure. Hai tiệm active cũ chưa có kỳ đang bị chặn giao dịch mới |
+| Migration **đề xuất, chưa áp dụng Aiven** | `migrations/V006__order_decision_time_rules.sql` (không có `.grants.sql`) | Tạo lại `sp_accept_quote`, `sp_bakery_decide_order`: giờ nhận phải còn ở tương lai khi chọn/xác nhận (kiểm tra sau mọi lần đọc có khóa), từ chối bắt buộc lý do. Không đổi bảng/quyền. Chỉ kiểm thử trên MySQL 8.4 disposable local. DDL commit ngầm từng câu, không atomic. Xem [ORDERS](../docs/ORDERS.md) |
 | Quyền backend | `security/app_user_grants.sql` | Tùy chọn. Cấp quyền cho tài khoản MySQL mới của backend, không dùng cho tài khoản quản trị |
 | Kiểm thử | `tests/10_single_connection_tests.sql` | Bộ kiểm thử một connection, chỉ chạy trên database thử |
 | Kiểm thử | `tests/20_concurrency_setup.sql` | Chuẩn bị dữ liệu cho kiểm thử đồng thời làm tay |

@@ -13,19 +13,30 @@ public static partial class SchemaScript
     public const string ProceduresFile = "database/install/02_procedures.sql";
     public const string GrantsFile = "database/security/app_user_grants.sql";
 
+    public const string OrderRulesMigrationFile = "database/migrations/V006__order_decision_time_rules.sql";
+
     /// <summary>
-    /// Migration đề xuất (chưa áp dụng lên Aiven), nạp theo thứ tự sau install để mã hiện tại có đủ cột/bảng.
-    /// Mỗi file có grants tương ứng <c>*.grants.sql</c> cùng định dạng app_user_grants.sql.
+    /// Migration nạp theo thứ tự sau install để mã hiện tại có đủ cột/bảng/procedure (V003–V005 đã áp dụng lên Aiven,
+    /// V006 mới chỉ kiểm thử local). Mỗi file có grants tương ứng <c>*.grants.sql</c> cùng định dạng app_user_grants.sql,
+    /// trừ các migration trong <see cref="MigrationsWithoutGrants"/>.
     /// </summary>
     public static readonly IReadOnlyList<string> MigrationFiles =
     [
         "database/migrations/V003__account_security.sql",
         "database/migrations/V004__bakery_onboarding.sql",
         "database/migrations/V005__subscription_payments.sql",
+        OrderRulesMigrationFile,
     ];
 
+    /// <summary>V006 chỉ tạo lại procedure (DEFINER); backend đã có EXECUTE nên không có file grants, không cấp thêm quyền.</summary>
+    public static readonly IReadOnlySet<string> MigrationsWithoutGrants = new HashSet<string>(StringComparer.Ordinal) { OrderRulesMigrationFile };
+
     public static IEnumerable<string> GrantFiles =>
-        [GrantsFile, .. MigrationFiles.Select(file => file.Replace(".sql", ".grants.sql", StringComparison.Ordinal))];
+    [
+        GrantsFile,
+        .. MigrationFiles.Where(file => !MigrationsWithoutGrants.Contains(file))
+            .Select(file => file.Replace(".sql", ".grants.sql", StringComparison.Ordinal)),
+    ];
 
     public static string LoadSanitizedSchema() => LoadSanitized(SchemaFile);
 

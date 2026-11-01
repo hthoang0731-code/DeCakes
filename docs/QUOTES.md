@@ -37,25 +37,85 @@ Actor lấy từ claim đã được kiểm tra phiên, không lấy từ body/q
 
 Thành viên thuộc hai tiệm vẫn không được dùng route tiệm A để đọc báo giá của tiệm B. Customer khác không biết yêu cầu/báo giá có tồn tại hay không qua các endpoint này. GET không ghi viewed, status hoặc thời gian.
 
-## Quy tắc đã chốt cho phần ghi tiếp theo
+## Đã triển khai: ghi báo giá của tiệm
 
-Tạo/sửa/rút báo giá và chọn báo giá tạo đơn **chưa có endpoint mới trong lần triển khai phần đọc này**. SQL nguồn đã có procedure; không thay SQL để hoàn thiện API khi chưa được duyệt riêng.
+Chọn báo giá tạo đơn thuộc Orders, xem [ORDERS](ORDERS.md) (02/11/2026). Phần ghi báo giá không sửa SQL nguồn, không chạy migration.
 
-Người dùng đã đồng ý cả hai quyết định ngày 01/11/2026:
+| Endpoint | Procedure | Thành công |
+| --- | --- | --- |
+| `POST /api/bakery-workspace/bakeries/{bakeryId}/requests/{requestId}/quotes` | `sp_create_quote` | 201, `Location` tới `.../quotes/{id}`, body là phiên bản vừa tạo |
+| `POST .../quotes/{quoteId}/revisions` | `sp_revise_quote` | 201, `Location` tới phiên bản **mới** (id mới); phiên bản cũ thành `superseded` |
+| `POST .../quotes/{quoteId}/withdraw` | `sp_withdraw_quote` | 200, body là phiên bản đã rút (`withdrawn`, `withdrawnAt`) |
 
-1. Tiệm **được báo giá cao hơn ngân sách và đề xuất giờ nhận khác yêu cầu**. Giá và giờ thực tế phải được thể hiện rõ để khách xem trước khi chọn; ngân sách/giờ mong muốn không tự ghi đè giá trị đã báo.
-2. Khi tạo/sửa báo giá, API **bắt buộc `now < validUntil <= estimatedPickupAt`**. Sai quan hệ bị từ chối, không tự sửa giờ hoặc làm tròn dữ liệu.
+Body tạo/sửa (sửa gửi toàn bộ nội dung mới): `{ price, sizeDescription?, servings?, flavor, decorationDescription, inscriptionText?, note?, estimatedPickupAt, validUntil, designAssetId? }`. Tiền tệ luôn VND, không nhận từ client.
 
-Các quyết định trên là yêu cầu cho phần ghi sẽ triển khai tiếp; chưa có validator/endpoint ghi ở checkpoint này. Việc kiểm tra lại giờ nhận khi khách chọn báo giá cần được xử lý riêng ở tầng procedure/Orders sau khi giữ khóa; validation trước CALL không thay thế kiểm tra đó. Không tự sửa SQL nguồn hoặc áp dụng migration lên Aiven.
+Policy `Bakery`, cookie phiên đã kiểm tra lại mỗi request, CSRF bắt buộc (filter toàn cục). Actor lấy từ claim. Thao tác ghi của tiệm **chưa** yêu cầu email đã xác minh: quy tắc này chưa được chốt.
 
-Các quy tắc SQL hiện có cần giữ khi triển khai ghi: mỗi phiên bản bất biến; revise tạo id mới; báo giá submitted đã hết hạn vẫn được revise nếu nội dung mới hợp lệ; withdraw không đổi request_bakeries khỏi quoted; tạo/sửa cần gói còn hạn, rút vẫn được khi gói hết hạn. Procedure tự quản lý transaction, gọi bằng connection riêng không có transaction ứng dụng và không retry mù.
+### Quy tắc đã duyệt (01/11/2026)
 
-## Kiểm chứng mới
+1. Tiệm **được báo giá cao hơn ngân sách và đề xuất giờ nhận khác yêu cầu**. API không so sánh hay ép giá/giờ theo yêu cầu ban đầu. Nội dung yêu cầu không bị ghi đè.
+2. Khi tạo/sửa, API **bắt buộc `now < validUntil <= estimatedPickupAt`**. `now` lấy từ `TimeProvider`. Thời gian phải là ISO 8601 có Z/offset, được đổi sang UTC, chỉ chính xác tới mili giây (DATETIME(3)); sai thì bị từ chối, không tự sửa hoặc làm tròn. Procedure kiểm tra lại `validUntil > now` và `estimatedPickupAt > now` bằng giờ database sau khi giữ khóa (`QUOTE_INVALID_TIMES`).
+
+Kiểm tra lại giờ nhận khi khách chọn báo giá thuộc phần Orders: migration đề xuất V006 kiểm tra trong `sp_accept_quote` sau khi giữ khóa (chỉ kiểm thử local, xem [ORDERS](ORDERS.md)); validation trước CALL không thay thế kiểm tra đó.
+
+### Validation theo schema (400 ValidationProblemDetails, không gọi store)
+
+- `price`: bắt buộc, > 0, ≤ 9 999 999 999,99, tối đa 2 chữ số thập phân (DECIMAL(12,2)); không làm tròn. Số sai kiểu hoặc vượt `decimal` bị model binding trả 400.
+- VARCHAR đếm theo **ký tự Unicode** như utf8mb4: `sizeDescription` 100, `flavor` 200 (bắt buộc), `inscriptionText` 200; một dòng, không ký tự điều khiển.
+- TEXT đếm theo **byte UTF-8**, tối đa 65 535: `decorationDescription` (bắt buộc), `note`; cho phép xuống dòng/tab.
+- Chuỗi được trim và chuẩn hóa NFC; chuỗi rỗng thành null. UTF-16 lỗi (surrogate lẻ) bị từ chối vì driver sẽ âm thầm thay bằng U+FFFD.
+- Cần `sizeDescription` hoặc `servings`; `servings` 1..65 535 (SMALLINT UNSIGNED); `designAssetId` > 0 nếu có.
+
+### Cách ly và gọi procedure
+
+- Mỗi thao tác mở một connection riêng, không có transaction ứng dụng, không retry. Nếu kết nối đứt khi CALL, không biết procedure đã commit hay chưa; client đọc lại lịch sử.
+- **Trước CALL**, store kiểm tra trên cùng connection:
+  - actor là user `active`, role `bakery` và thành viên `active` (owner/staff) của tiệm trên route;
+  - yêu cầu đã gửi đến tiệm đó;
+  - với sửa/rút, báo giá thuộc **đúng** cặp `bakeryId`/`requestId` trên route.
+
+  Lý do: revise/withdraw suy ra tiệm từ báo giá, nên một user thuộc cả tiệm A và B có thể thao tác báo giá của B qua route của A nếu không chặn. Procedure kiểm tra lại quyền thành viên dưới khóa.
+- Gọi bằng `CommandType.StoredProcedure`. OUT `p_quote_id`/`p_new_quote_id` đọc kiểu `Int64`; NULL hoặc kiểu khác ném lỗi (500), không đoán id. Sau CALL, service đọc lại phiên bản trong cùng phạm vi tiệm/yêu cầu của actor.
+- Lỗi nghiệp vụ chỉ được ánh xạ khi `SqlState = 45000` và `Message` khớp đúng allowlist **của chính procedure đó**, gồm các guard nó gọi (`QuoteProcedureErrors`). Kiểm thử đối chiếu allowlist với bản có hiệu lực: create/revise theo V005, withdraw và các guard theo install/02. Mã của procedure khác, lỗi CHECK/UNIQUE, deadlock, dữ liệu quá dài… trả 500 đã che chi tiết.
+
+| Kết quả | HTTP / code |
+| --- | --- |
+| Không phải thành viên active, tiệm không tồn tại (`NOT_BAKERY_MEMBER`, `USER_NOT_*`, `BAKERY_NOT_FOUND`) | 404 `BAKERY_NOT_FOUND` |
+| Yêu cầu không tồn tại/chưa gửi đến tiệm (`REQUEST_NOT_FOUND`, `REQUEST_NOT_SENT_TO_BAKERY`) | 404 `REQUEST_NOT_FOUND` |
+| Báo giá không thuộc đúng tiệm/yêu cầu (`QUOTE_NOT_FOUND`) | 404 `QUOTE_NOT_FOUND` |
+| `INVALID_ARGUMENT`, `QUOTE_INVALID_PRICE`, `QUOTE_INVALID_TIMES` | 400 cùng mã |
+| `DESIGN_ASSET_NOT_FOUND`, `DESIGN_ASSET_WRONG_REQUEST`, `DESIGN_ASSET_WRONG_BAKERY` | 400 `DESIGN_ASSET_INVALID` |
+| `REQUEST_NOT_OPEN`, `REQUEST_DECLINED_BY_BAKERY`, `QUOTE_ALREADY_EXISTS`, `QUOTE_ALREADY_ACCEPTED`, `QUOTE_NOT_CURRENT`, `BAKERY_NOT_ACTIVE`, `BAKERY_SUBSCRIPTION_INACTIVE` | 409 cùng mã |
+
+### Quy tắc SQL được giữ nguyên
+
+- Mỗi phiên bản bất biến; sửa tạo id mới với `revision_no + 1` và chỉ đổi `status`/`updated_at` của phiên bản cũ. Sửa bằng id cũ trả `QUOTE_NOT_CURRENT`.
+- Báo giá `submitted` đã hết hạn vẫn sửa được nếu nội dung mới hợp lệ.
+- Rút không đổi `request_bakeries` khỏi `quoted`. Rút lần hai trả `QUOTE_NOT_CURRENT`. Sau khi rút, tạo báo giá mới được (revision tiếp theo).
+- Tạo/sửa cần gói còn hạn và tiệm `active`. Rút vẫn được khi gói hết hạn hoặc tiệm `suspended`.
+- Đồng thời: nhiều lần tạo cùng lúc cho một cặp yêu cầu–tiệm chỉ một thành công, còn lại `QUOTE_ALREADY_EXISTS`. Nhiều lần sửa cùng một phiên bản chỉ tạo đúng một phiên bản mới, còn lại `QUOTE_NOT_CURRENT`.
+
+## Kiểm chứng phần ghi (01/11/2026)
+
+- Application `QuoteWriteServiceTests` (35): validator theo từng trường và biên DECIMAL/VARCHAR/TEXT/UTF-16/thời gian; không gọi store khi sai; forwarding actor/phạm vi/cancellation; đọc lại; từ chối không đọc lại; thiếu id hoặc không đọc lại được không bị coi là thành công.
+- API `QuoteWriteApiTests` (27): 401, CSRF thiếu/sai, 403 customer/admin, 201 + `Location`, 200 khi rút, ValidationProblemDetails, JSON sai kiểu, ánh xạ 14 kết quả, lỗi lạ 500 đã che, phiên bị vô hiệu không ghi được.
+- Không cần database (`ScriptAndErrorMappingTests`, 12 ca mới): allowlist từng procedure khớp đúng mọi `MESSAGE_TEXT` của procedure và guard nó gọi; mã của procedure khác/sai hoa thường/SQLSTATE khác không được ánh xạ.
+- MySQL 8.4.13 disposable loopback (`MySqlQuoteWriteStoreTests`, 11):
+  - OUT và giá trị chính xác: giá tối đa, 200 emoji, TEXT 65 535 byte, UTC mili giây;
+  - giá vượt ngân sách, giờ nhận khác yêu cầu;
+  - chốt route với user thuộc hai tiệm; staff, membership bị gỡ, user bị khóa, sai role;
+  - lịch sử bất biến; sửa báo giá hết hạn; rút giữ `quoted`; gói hết hạn; declined/cancelled/accepted/suspended;
+  - ảnh thiết kế; guard thời gian/giá của procedure; lỗi ngoài allowlist không ghi gì;
+  - tạo/sửa đồng thời.
+
+## Kiểm chứng phần đọc
+
+**Bổ sung nghiệm thu HTTP thật ngày 01/11/2026:** 41 request API qua Kestrel HTTPS với service/store thật và MySQL 8.4.13 disposable, 57 kiểm tra PASS/0 FAIL. Luồng gồm đăng ký/xác minh bằng hộp thư giả, admin duyệt/trial, khách gửi yêu cầu, tiệm tạo/sửa/rút/tạo lại, Location, lịch sử bất biến, giá vượt ngân sách/giờ nhận khác, CSRF thiếu, sai role và thao tác lặp. Metadata cuối: 3 phiên bản (1 superseded, 1 withdrawn, 1 submitted), giá bản đầu giữ nguyên, ngân sách yêu cầu không đổi, request_bakeries vẫn quoted, 0 order. Email giả chỉ phục vụ kiểm thử, không gọi Resend/payOS hoặc ghi Aiven. Đã dọn host/MySQL/database/user/file mật khẩu tạm. API cổng 7215 đã build và mở lại, OpenAPI có đủ 3 POST mới. Báo cáo chi tiết cục bộ: `TestResults/quotes-http-review-20261101/HTTP_REVIEW.md` (Git bỏ qua).
 
 - Application: 14 kiểm thử đọc, filter/paging, ranh giới hết hạn, một thời điểm cho cả trang, forwarding scope/cancellation và lỗi hệ thống.
 - API fake/in-memory: 23 kiểm thử 401/403/404/400, actor từ phiên, đúng trường JSON, đọc khi email chưa xác minh, phân trang và lỗi được che.
 - MySQL 8.4.13 disposable: 7 kiểm thử read mapping, Unicode/null/UTC, cách ly khách/tiệm, một user thuộc hai tiệm, removed/disabled/sai role, đọc lịch sử khi suspended/hết hạn, lọc/thứ tự/offset 64 bit và GET không ghi.
-- Setup các ca MySQL gọi procedure tạo/sửa/rút nguồn qua đúng quyền backend. Đã đọc được OUT p_quote_id và p_new_quote_id khi CommandType.StoredProcedure, không transaction ứng dụng. Đây là kiểm chứng driver và setup, **chưa phải triển khai store/API ghi**.
+- Setup các ca MySQL gọi procedure tạo/sửa/rút nguồn qua đúng quyền backend. Đã đọc được OUT p_quote_id và p_new_quote_id khi CommandType.StoredProcedure, không transaction ứng dụng. Đây là kiểm chứng driver và setup ở checkpoint phần đọc; store/API ghi được kiểm chứng riêng ở mục trên.
 - Fixture sau kiểm thử: 0 database/tài khoản tạm; MySQL disposable và thư mục dữ liệu tạm đã dọn. Không ghi Aiven, không gửi email thật, không commit/push.
 
 Xem nguồn tham chiếu [nghiệp vụ](BUSINESS_RULES_REVIEW.md), [schema](../database/SCHEMA.md), [procedure](../database/STORED_PROCEDURES.md) và [hướng dẫn kiểm thử](../tests/README.md).

@@ -5,6 +5,7 @@ using DeCakes.Application.BakeryOnboarding;
 using DeCakes.Application.BakeryWorkspace;
 using DeCakes.Application.Cakes;
 using DeCakes.Application.DesignRequests;
+using DeCakes.Application.Orders;
 using DeCakes.Application.Quotes;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using DeCakes.Application.Health;
@@ -29,6 +30,7 @@ public static class DependencyInjection
         services.AddScoped<ICakeCatalogService, CakeCatalogService>();
         services.AddScoped<IDesignRequestService, DesignRequestService>();
         services.AddScoped<IQuoteService, QuoteService>();
+        services.AddScoped<IOrderService, OrderService>();
         services.AddScoped<IBakeryWorkspaceService, BakeryWorkspaceService>();
         services.TryAddSingleton(TimeProvider.System);
         return services;

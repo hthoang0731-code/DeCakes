@@ -6,7 +6,7 @@ Chạy: `dotnet test` tại thư mục repository.
 | --- | --- | --- |
 | `DeCakes.Application.Tests` | Fake | `AccountService` với store và hasher giả (chuẩn hóa email, độ dài, mật khẩu không trim, trùng email, đăng nhập thất bại, rehash). Paging và Catalog services: validation, defaults, filter, lookahead, 64-bit offset, detail outcomes, lỗi và cancellation. `DesignRequestValidator` (giới hạn theo schema, DECIMAL không làm tròn, `pickupAt` có offset/mili giây/tương lai, TEXT theo byte) và `DesignRequestService` với store giả. `BakeryWorkspaceService`: kiểm tra `status`/`requestStatus`/phân trang trước khi truy vấn, mặc định, phân biệt `BAKERY_NOT_FOUND`/`REQUEST_NOT_FOUND`. |
 | `DeCakes.Api.Tests` | Fake/in-memory | API qua `WebApplicationFactory` (TestServer scheme HTTPS) và Kestrel HTTPS thật, store user trong bộ nhớ, `PasswordHasher` thật: CSRF, cookie flags và hạn 2 giờ, `/me`, logout, user bị disabled/xóa/đổi role, 401/403, 429, lỗi database được che, health không phụ thuộc database, nhánh hash giả. Catalog (xem mục dưới). DesignRequests với store trong bộ nhớ: 401/403, CSRF, 201 + `Location`, validation, truy cập chéo khách (404), phân trang và lọc, sửa draft/409, gửi tiệm và ánh xạ mọi kết quả procedure sang HTTP, lỗi được che. Inbox của tiệm (`InMemoryBakeryWorkspaceStore` đọc chung dữ liệu với store yêu cầu, nên khách gửi qua API rồi tiệm đọc qua API): 401, customer/admin 403, owner/staff đọc đúng tiệm, removed/tiệm khác/tiệm không tồn tại cùng 404, yêu cầu chưa gửi 404, không lộ thông tin tài khoản khách (đối chiếu đúng tập trường JSON), thứ tự khi `sentAt` trùng, phân trang, hai bộ lọc riêng, tham số sai 400, GET không đổi trạng thái/thời gian, tiệm không active vẫn xem lịch sử, lỗi được che. |
-| `DeCakes.Infrastructure.Tests` | Chốt bảo vệ + MySQL thật | Chạy luôn: `SafetyGuardTests`, `ScriptAndErrorMappingTests` (bộ tách script hiểu DELIMITER, quyền backend, allowlist mã SIGNAL đối chiếu với `02_procedures.sql`). MySQL 8.4 thật: `MySqlUserAccountStoreTests`, `MySqlDesignRequestStoreTests` (gồm procedure, đồng thời, khóa dòng), `MySqlBakeryCatalogStoreTests`, `MySqlCakeCatalogStoreTests`, `MySqlBakeryWorkspaceStoreTests` (inbox của tiệm); **bị bỏ qua** nếu chưa đặt `DECAKES_TEST_MYSQL_ADMIN`. |
+| `DeCakes.Infrastructure.Tests` | Chốt bảo vệ + MySQL thật | Chạy luôn: `SafetyGuardTests`, `ScriptAndErrorMappingTests` (bộ tách script hiểu DELIMITER, quyền backend, allowlist mã SIGNAL đối chiếu với `02_procedures.sql`). MySQL 8.4 thật: `MySqlUserAccountStoreTests`, `MySqlDesignRequestStoreTests` (gồm procedure, đồng thời, khóa dòng), `MySqlBakeryCatalogStoreTests`, `MySqlCakeCatalogStoreTests`, `MySqlBakeryWorkspaceStoreTests` (inbox của tiệm), `MySqlQuoteReadStoreTests`, `MySqlQuoteWriteStoreTests` (báo giá), `MySqlOrderStoreTests` (đơn); **bị bỏ qua** nếu chưa đặt `DECAKES_TEST_MYSQL_ADMIN`. |
 
 Kiểm thử API dùng môi trường `Testing` (không nạp user-secrets), Data Protection khóa tạm, `FakeTimeProvider`. Ca Kestrel HTTPS cần chứng chỉ phát triển (`dotnet dev-certs https`); client chỉ tin chứng chỉ đó làm root, vẫn kiểm tra hostname, không tắt xác minh. Thiếu chứng chỉ thì ca này bị bỏ qua.
 
@@ -20,7 +20,7 @@ Chốt bảo vệ (`MySqlTestSettings`):
 - Từ chối host không phải `localhost`/`127.0.0.1`/`::1`, chuỗi có `aivencloud`, tài khoản `avnadmin`/`decakes_app`, chuỗi có sẵn `Database`.
 - Từ chối server không phải 8.4.x.
 - Tự tạo database `decakes_test_<ngẫu nhiên>` và tài khoản `dc_test_<ngẫu nhiên>`, cấp đúng các câu GRANT trong `security/app_user_grants.sql` (chỉ đổi database và tài khoản; câu lệnh khác dạng bị từ chối), rồi xóa cả hai khi xong.
-- Nạp `database/install/01_schema.sql` và `02_procedures.sql` gốc sau khi bỏ đúng dòng `USE decakes_db;`, tách câu lệnh bằng `SqlScriptSplitter` (hiểu `DELIMITER`, chuỗi và comment; không split mù theo `;`). Script bị từ chối nếu còn `USE`, `CREATE/DROP/ALTER DATABASE|SCHEMA`, `GRANT`, `REVOKE` hay lệnh tài khoản. Trước khi nạp, kiểm tra `SELECT DATABASE()` là database tạm. Procedure do tài khoản quản trị kiểm thử tạo (DEFINER), như production.
+- Nạp `database/install/01_schema.sql`, `02_procedures.sql` rồi các migration V003–V006 (`SchemaScript.MigrationFiles`; V006 mới chỉ kiểm thử local) sau khi bỏ đúng dòng `USE decakes_db;`. Quyền lấy từ `app_user_grants.sql` và `*.grants.sql` tương ứng; V006 không có file grants và nằm trong `SchemaScript.MigrationsWithoutGrants`, không cấp thêm quyền. Script được tách câu lệnh bằng `SqlScriptSplitter` (hiểu `DELIMITER`, chuỗi và comment; không split mù theo `;`). Script bị từ chối nếu còn `USE`, `CREATE/DROP/ALTER DATABASE|SCHEMA`, `GRANT`, `REVOKE` hay lệnh tài khoản. Trước khi nạp, kiểm tra `SELECT DATABASE()` là database tạm. Procedure do tài khoản quản trị kiểm thử tạo (DEFINER), như production.
 
 Ví dụ với Docker (cổng 3307 chỉ trên loopback, mật khẩu tạm chỉ cho container này):
 
@@ -60,10 +60,26 @@ dotnet test tests/DeCakes.Infrastructure.Tests --filter 'FullyQualifiedName~MySq
 
 ## Dự kiến bổ sung
 
-- Báo giá đã có kiểm thử phần đọc: `QuoteReadServiceTests` (14), `QuoteReadApiTests` (23) và `MySqlQuoteReadStoreTests` (7). Các ca MySQL dùng fixture loopback hiện có và procedure nguồn để chuẩn bị phiên bản, gồm kiểm chứng OUT create/revise; không ghi Aiven. Chi tiết phạm vi phần đọc và quy tắc đã chốt cho phần ghi tiếp theo trong [QUOTES](../docs/QUOTES.md).
+- Báo giá:
+  - Phần đọc: `QuoteReadServiceTests` (14), `QuoteReadApiTests` (23), `MySqlQuoteReadStoreTests` (7).
+  - Phần ghi: `QuoteWriteServiceTests` (35), `QuoteWriteApiTests` (27), allowlist từng procedure trong `ScriptAndErrorMappingTests` (12, không cần database) và `MySqlQuoteWriteStoreTests` (11). Nhóm MySQL gồm OUT create/revise, chốt route, gói hết hạn, lịch sử bất biến, đồng thời và lỗi ngoài allowlist.
+  - Các ca MySQL dùng fixture loopback hiện có và procedure nguồn; không ghi Aiven. Chi tiết trong [QUOTES](../docs/QUOTES.md).
+  - Chạy riêng: `dotnet test tests/DeCakes.Infrastructure.Tests --filter 'FullyQualifiedName~Quote'`.
+
+- Đơn hàng (chi tiết trong [ORDERS](../docs/ORDERS.md)):
+  - `OrderServiceTests` (33): lọc/phân trang, validation decision/reason.
+  - `OrderApiTests` (47, store giả): 401/403, CSRF, email chưa xác minh khi accept, actor từ phiên, 201 + `Location`, ánh xạ lỗi gồm 503 `ORDER_WORKFLOW_NOT_READY`, lỗi được che.
+  - `ScriptAndErrorMappingTests` (19 ca mới, không cần database): V006 nạp được, chỉ thêm đúng các dòng đã duyệt so với bản cũ, allowlist khớp procedure + guard có hiệu lực.
+  - `MySqlOrderStoreTests` (14):
+    - bản chốt và OUT;
+    - chọn và quyết định đồng thời;
+    - hết hạn/giờ nhận trôi qua khi chờ khóa: xác nhận thao tác ở LOCK WAIT qua `information_schema.innodb_trx`;
+    - quyền owner/staff/hai tiệm, gói/hồ sơ;
+    - thiếu version 6: tạm xóa dòng `schema_migrations` trong database tạm rồi khôi phục ở `finally`;
+    - lỗi ngoài allowlist; GET không ghi.
+  - Chạy riêng: `dotnet test tests/DeCakes.Infrastructure.Tests --filter 'FullyQualifiedName~Order'`.
 
 - `DeCakes.Domain.Tests`: quy tắc nghiệp vụ khi có.
-- Kiểm thử OUT parameter khi triển khai Quotes (`sp_create_quote`, `sp_revise_quote`).
 
 ## Admin giai đoạn 1
 

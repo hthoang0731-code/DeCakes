@@ -1,3 +1,4 @@
+using System.Data;
 using DeCakes.Application.DesignRequests;
 using DeCakes.Application.Quotes;
 using DeCakes.Infrastructure.Persistence;
@@ -78,6 +79,124 @@ public sealed class MySqlQuoteStore(IMySqlConnectionFactory connectionFactory) :
         return quote is null
             ? new QuoteReadResult(QuoteReadOutcome.QuoteNotFound)
             : new QuoteReadResult(QuoteReadOutcome.Found, quote);
+    }
+
+    public async Task<QuoteWriteResult> CreateAsync(
+        long actorUserId, long bakeryId, long requestId, QuoteValues values, CancellationToken cancellationToken)
+    {
+        // Procedure tự START TRANSACTION/COMMIT: connection riêng cho thao tác này, không có transaction ứng dụng.
+        // Không retry: nếu kết nối đứt giữa chừng, không biết procedure đã commit hay chưa.
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        var access = await WriteAccessAsync(connection, actorUserId, bakeryId, requestId, null, cancellationToken);
+        if (access != QuoteWriteOutcome.Saved) return new QuoteWriteResult(access);
+
+        await using var command = Procedure(connection, "sp_create_quote");
+        command.Parameters.Add("p_request_id", MySqlDbType.Int64).Value = requestId;
+        command.Parameters.Add("p_bakery_id", MySqlDbType.Int64).Value = bakeryId;
+        command.Parameters.Add("p_actor_user_id", MySqlDbType.Int64).Value = actorUserId;
+        AddContent(command, values);
+        var output = Output(command, "p_quote_id");
+        return await CallAsync(command, output, QuoteProcedureErrors.Create, cancellationToken);
+    }
+
+    public async Task<QuoteWriteResult> ReviseAsync(
+        long actorUserId, long bakeryId, long requestId, long quoteId, QuoteValues values, CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        var access = await WriteAccessAsync(connection, actorUserId, bakeryId, requestId, quoteId, cancellationToken);
+        if (access != QuoteWriteOutcome.Saved) return new QuoteWriteResult(access);
+
+        await using var command = Procedure(connection, "sp_revise_quote");
+        command.Parameters.Add("p_quote_id", MySqlDbType.Int64).Value = quoteId;
+        command.Parameters.Add("p_actor_user_id", MySqlDbType.Int64).Value = actorUserId;
+        AddContent(command, values);
+        var output = Output(command, "p_new_quote_id");
+        return await CallAsync(command, output, QuoteProcedureErrors.Revise, cancellationToken);
+    }
+
+    public async Task<QuoteWriteResult> WithdrawAsync(
+        long actorUserId, long bakeryId, long requestId, long quoteId, CancellationToken cancellationToken)
+    {
+        await using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        var access = await WriteAccessAsync(connection, actorUserId, bakeryId, requestId, quoteId, cancellationToken);
+        if (access != QuoteWriteOutcome.Saved) return new QuoteWriteResult(access);
+
+        await using var command = Procedure(connection, "sp_withdraw_quote");
+        command.Parameters.Add("p_quote_id", MySqlDbType.Int64).Value = quoteId;
+        command.Parameters.Add("p_actor_user_id", MySqlDbType.Int64).Value = actorUserId;
+        var result = await CallAsync(command, null, QuoteProcedureErrors.Withdraw, cancellationToken);
+        return result.Outcome == QuoteWriteOutcome.Saved ? result with { QuoteId = quoteId } : result;
+    }
+
+    // Phạm vi route trước CALL: procedure chỉ suy ra tiệm từ báo giá, nên một user thuộc cả hai tiệm có thể ghi báo giá
+    // của tiệm B qua route tiệm A nếu không chặn ở đây. design_request_id/bakery_id của báo giá không bao giờ đổi.
+    // Quyền thành viên được procedure kiểm tra lại dưới khóa.
+    private static async Task<QuoteWriteOutcome> WriteAccessAsync(
+        MySqlConnection connection, long actorUserId, long bakeryId, long requestId, long? quoteId,
+        CancellationToken cancellationToken)
+    {
+        switch (await BakeryAccessAsync(connection, actorUserId, bakeryId, requestId, cancellationToken))
+        {
+            case QuoteReadOutcome.BakeryNotFound: return QuoteWriteOutcome.BakeryNotFound;
+            case QuoteReadOutcome.RequestNotFound: return QuoteWriteOutcome.RequestNotFound;
+        }
+
+        if (quoteId is null) return QuoteWriteOutcome.Saved;
+
+        await using var command = new MySqlCommand(
+            "SELECT 1 FROM quotes WHERE id = @quoteId AND design_request_id = @requestId AND bakery_id = @bakeryId", connection);
+        AddScope(command, actorUserId, bakeryId, requestId);
+        command.Parameters.Add("@quoteId", MySqlDbType.Int64).Value = quoteId.Value;
+        return await command.ExecuteScalarAsync(cancellationToken) is null
+            ? QuoteWriteOutcome.QuoteNotFound
+            : QuoteWriteOutcome.Saved;
+    }
+
+    private static MySqlCommand Procedure(MySqlConnection connection, string name) =>
+        new(name, connection) { CommandType = CommandType.StoredProcedure };
+
+    private static MySqlParameter Output(MySqlCommand command, string name)
+    {
+        var output = command.Parameters.Add(name, MySqlDbType.Int64);
+        output.Direction = ParameterDirection.Output;
+        return output;
+    }
+
+    // Kiểu khớp khai báo IN của sp_create_quote/sp_revise_quote; giá và thời gian đã được kiểm tra không cần làm tròn.
+    private static void AddContent(MySqlCommand command, QuoteValues values)
+    {
+        command.Parameters.Add("p_price", MySqlDbType.NewDecimal).Value = values.Price;
+        command.Parameters.Add("p_size_description", MySqlDbType.VarChar).Value = (object?)values.SizeDescription ?? DBNull.Value;
+        command.Parameters.Add("p_servings", MySqlDbType.UInt16).Value =
+            values.Servings is { } servings ? checked((ushort)servings) : (object)DBNull.Value;
+        command.Parameters.Add("p_flavor", MySqlDbType.VarChar).Value = values.Flavor;
+        command.Parameters.Add("p_decoration", MySqlDbType.Text).Value = values.DecorationDescription;
+        command.Parameters.Add("p_inscription", MySqlDbType.VarChar).Value = (object?)values.InscriptionText ?? DBNull.Value;
+        command.Parameters.Add("p_note", MySqlDbType.Text).Value = (object?)values.Note ?? DBNull.Value;
+        command.Parameters.Add("p_estimated_pickup_at", MySqlDbType.DateTime).Value = values.EstimatedPickupAtUtc;
+        command.Parameters.Add("p_valid_until", MySqlDbType.DateTime).Value = values.ValidUntilUtc;
+        command.Parameters.Add("p_design_asset_id", MySqlDbType.Int64).Value = (object?)values.DesignAssetId ?? DBNull.Value;
+    }
+
+    private static async Task<QuoteWriteResult> CallAsync(
+        MySqlCommand command, MySqlParameter? output, IReadOnlyDictionary<string, QuoteWriteOutcome> allowlist,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        catch (MySqlException ex) when (QuoteProcedureErrors.TryMap(allowlist, ex.SqlState, ex.Message, out var outcome))
+        {
+            return new QuoteWriteResult(outcome);
+        }
+
+        if (output is null) return new QuoteWriteResult(QuoteWriteOutcome.Saved);
+
+        // Thành công thì OUT là BIGINT; NULL hoặc kiểu khác là trạng thái không hợp lệ, không đoán id.
+        return output.Value is long id && id > 0
+            ? new QuoteWriteResult(QuoteWriteOutcome.Saved, id)
+            : throw new InvalidOperationException($"OUT {output.ParameterName} không phải BIGINT hợp lệ.");
     }
 
     private static async Task<QuoteReadOutcome> BakeryAccessAsync(

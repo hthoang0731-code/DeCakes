@@ -147,7 +147,7 @@ Cần [V003](database/migrations/V003__account_security.sql) và [grants](databa
 - Token mất hiệu lực khi user đổi email, bị `disabled`, hết hạn, bị thu hồi, sai mục đích. Đặt lại mật khẩu không mở lại user `disabled` và không áp dụng cho tài khoản demo. Đặt lại thành công đánh dấu email đã xác minh (đã chứng minh hộp thư).
 - Giới hạn: theo IP cho nhóm khôi phục (`Auth:RecoveryRateLimit`, mặc định 5 request/300 giây) và theo user+mục đích (cách nhau ≥ 60 giây, ≤ 5 token/giờ). Quên mật khẩu vượt ngưỡng vẫn trả 202.
 - Thu hồi phiên: cookie mang claim `decakes:sv` = `users.session_version` lúc cấp; mỗi request so với database. Đổi/đặt lại mật khẩu làm mọi cookie đã cấp mất hiệu lực ở mọi trình duyệt; đổi mật khẩu cấp lại cookie cho trình duyệt đang dùng. Cookie cấp trước khi triển khai (không có claim) bị từ chối một lần.
-- Mức truy cập khi chưa xác minh: đăng nhập, `/me`, đổi mật khẩu, gửi lại email, đọc dữ liệu của mình. Bị chặn (403 `EMAIL_NOT_VERIFIED`): customer tạo/gửi yêu cầu; owner gửi hồ sơ duyệt, mời staff và checkout. Chọn báo giá tạo đơn chưa có endpoint và phải gắn `[RequireVerifiedEmail]` khi xây.
+- Mức truy cập khi chưa xác minh: đăng nhập, `/me`, đổi mật khẩu, gửi lại email, đọc dữ liệu của mình. Bị chặn (403 `EMAIL_NOT_VERIFIED`): customer tạo/gửi yêu cầu; owner gửi hồ sơ duyệt, mời staff và checkout; customer chọn báo giá tạo đơn. Thao tác đơn của tiệm chưa yêu cầu xác minh email.
 - Tài khoản cũ: giữ `email_verified_at = NULL` (không tự đánh dấu), vẫn đăng nhập và tự xác minh. Admin (kể cả tạo bằng bootstrap) không bị chặn ở API Admin hiện có; **đề xuất** khi có email thật: admin tự xác minh qua cùng luồng, sau đó mới bật yêu cầu xác minh cho thao tác ghi của Admin.
 - Gửi email: `ResendAccountEmailSender` gọi `POST https://api.resend.com/emails` bằng `HttpClient`, chỉ khi có `App:PublicBaseUrl` (HTTPS), `Email:From`, `Email:Resend:ApiKey` (đặt bằng user-secrets/biến môi trường). Thiếu cấu hình: không gọi mạng, coi như gửi thất bại; ứng dụng và health vẫn chạy. Request có header `User-Agent` (Resend trả 403 nếu thiếu; trước 01/11/2026 adapter không gửi header này). Log chỉ gồm loại email, id email Resend trả về (`Resend đã nhận email …, id …`), mã HTTP + tên lỗi Resend, tên khóa cấu hình còn thiếu; không có địa chỉ email, token, link hay khóa. **Chưa kiểm chứng với tài khoản/domain Resend thật** — xem mục Cấu hình email bên dưới.
 - Rủi ro còn lại: thời gian phản hồi của quên mật khẩu khác nhau giữa email có và không có tài khoản (ghi DB + gọi dịch vụ email đồng bộ); cần hàng đợi gửi nền nếu muốn che hoàn toàn. Đổi mật khẩu và đặt lại mật khẩu đồng thời trên cùng user có thể bị InnoDB phát hiện deadlock và rollback một bên (500, không ghi dở).
@@ -280,7 +280,7 @@ Mã SIGNAL được nhận diện khi `SqlState = 45000` và `Message` trùng đ
 Giới hạn hiện tại:
 
 - Chưa có ảnh tham khảo (upload, `media_assets`), hủy yêu cầu, AI tạo ảnh.
-- Tiệm đã đọc được yêu cầu nhận được (mục dưới), nhưng chưa đánh dấu đã xem/từ chối được; đã có đọc lịch sử báo giá, chưa có API ghi báo giá hoặc đơn.
+- Tiệm đã đọc được yêu cầu nhận được (mục dưới), nhưng chưa đánh dấu đã xem/từ chối được; đã có đọc lịch sử và tạo/sửa/rút báo giá; chọn báo giá tạo đơn xem mục Đơn hàng.
 - Khách chọn tiệm từ Catalog (`GET /api/bakeries`); endpoint gửi tiệm nhận `bakeryId` đã biết.
 - Mẫu bánh truyền cảm hứng được kiểm tra lúc tạo/sửa; nếu tiệm ẩn mẫu sau đó, yêu cầu vẫn giữ liên kết (khóa ngoại chỉ bảo đảm mẫu tồn tại).
 
@@ -339,12 +339,34 @@ Quyền đọc:
 Giới hạn hiện tại:
 
 - Đăng ký tiệm, hồ sơ, thành viên: xem mục Onboarding bên dưới.
-- Chưa có đánh dấu đã xem, từ chối yêu cầu hoặc API ghi báo giá.
+- Chưa có đánh dấu đã xem hoặc từ chối yêu cầu. Ghi báo giá: mục Báo giá bên dưới.
 
-## Đọc báo giá
+## Báo giá
 
-Customer xem báo giá của yêu cầu mình tại `GET /api/design-requests/{requestId}/quotes[/{quoteId}]`. Thành viên tiệm xem báo giá riêng của tiệm tại `GET /api/bakery-workspace/bakeries/{bakeryId}/requests/{requestId}/quotes[/{quoteId}]`. Mỗi phiên bản trả đầy đủ nội dung, `isCurrent` và `isExpired`; không lộ thông tin tài khoản khách/người tạo. Danh sách gồm cả lịch sử, phân trang mặc định 20/tối đa 100, lọc `status`, sắp xếp `created_at DESC, id DESC`. GET không ghi database. Chi tiết quyền, lỗi, kiểm chứng và quy tắc đã chốt cho phần ghi tiếp theo: [docs/QUOTES.md](docs/QUOTES.md).
+Customer xem báo giá của yêu cầu mình tại `GET /api/design-requests/{requestId}/quotes[/{quoteId}]`. Thành viên tiệm xem báo giá riêng của tiệm tại `GET /api/bakery-workspace/bakeries/{bakeryId}/requests/{requestId}/quotes[/{quoteId}]`. Mỗi phiên bản trả đầy đủ nội dung, `isCurrent` và `isExpired`; không lộ thông tin tài khoản khách/người tạo. Danh sách gồm cả lịch sử, phân trang mặc định 20/tối đa 100, lọc `status`, sắp xếp `created_at DESC, id DESC`. GET không ghi database.
+
+Thành viên active (owner/staff) của tiệm ghi báo giá qua procedure nguồn:
+
+- `POST .../quotes` tạo (201 + `Location`);
+- `POST .../quotes/{quoteId}/revisions` sửa bằng phiên bản mới (201 + `Location` của id mới);
+- `POST .../quotes/{quoteId}/withdraw` rút phiên bản hiện hành (200).
+
+Giá được vượt ngân sách và giờ nhận được khác yêu cầu. Bắt buộc `now < validUntil <= estimatedPickupAt` (có Z/offset, UTC, mili giây). Store kiểm tra báo giá thuộc đúng tiệm/yêu cầu trên route trước CALL. Mã SIGNAL ánh xạ theo allowlist của từng procedure; lỗi khác 500 đã che.
+
+Chi tiết quyền, validation, bảng lỗi và kiểm chứng: [docs/QUOTES.md](docs/QUOTES.md).
 - Chưa có ảnh tham khảo của yêu cầu.
+
+## Đơn hàng (Orders)
+
+Cần [migration V006](database/migrations/V006__order_decision_time_rules.sql). **V006 mới chỉ được kiểm thử trên MySQL 8.4 disposable local, chưa áp dụng lên Aiven.** Khi database chưa có version 6, accept và decision trả 503 `ORDER_WORKFLOW_NOT_READY` và không gọi procedure; các GET đơn vẫn chạy trên V005.
+
+- Khách: `POST /api/design-requests/{requestId}/quotes/{quoteId}/accept` (email đã xác minh, CSRF; 201 + `Location: /api/orders/{id}`, body là bản chốt); `GET /api/orders`, `GET /api/orders/{orderId}`, `GET /api/design-requests/{requestId}/order`.
+- Tiệm (owner/staff active của đúng tiệm): `GET /api/bakery-workspace/bakeries/{bakeryId}/orders[/{orderId}]`; `POST .../orders/{orderId}/decision` với `{ decision: "confirm" | "reject", reason }` (reason bắt buộc khi reject, tối đa 500 ký tự; confirm không nhận reason). 200 với đơn đọc lại.
+- Bản chốt đọc từ `orders.agreed_*`; không trả thông tin liên hệ, `customer_id`, người quyết định hay URL ảnh. Lặp lại hoặc sai trạng thái trả 409. Danh sách lọc mọi trạng thái của schema, phân trang 20/tối đa 100, `created_at DESC, id DESC`.
+- V006: giờ nhận phải còn ở tương lai khi accept và confirm (giờ database sau mọi lần đọc có khóa, kể cả khi guard gói phải chờ khóa); reject bắt buộc lý do. Gói hết hạn chặn tạo đơn nhưng không chặn xử lý đơn đã có; reject vẫn được khi tiệm suspended hoặc đã qua giờ nhận.
+- Chưa có ready, picked_up, hủy đơn, deadline tự động, thanh toán tiền bánh, chat hay AI.
+
+Chi tiết hợp đồng, bảng lỗi, migration và kiểm chứng: [docs/ORDERS.md](docs/ORDERS.md).
 
 ## Onboarding tiệm, staff và admin review
 
@@ -375,7 +397,7 @@ Chưa có (chưa chốt): sửa hồ sơ sau khi `active`, mở lại hồ sơ `
 Đây là phí sử dụng DeCakes của tiệm, **không phải** tiền khách mua bánh. Cần [V005](database/migrations/V005__subscription_payments.sql) + [grants](database/migrations/V005__subscription_payments.grants.sql). **Đã áp dụng lên Aiven ngày 31/10/2026.**
 
 - Quyền tại thời điểm t: tiệm có kỳ (trial/paid) `starts_at <= t < ends_at`, tính mỗi lần kiểm tra (không dựa vào job). Trial = 30 × 24 giờ từ lúc duyệt. Gia hạn: kỳ mới bắt đầu từ max(lúc thanh toán được xác nhận, ngày hết hạn hiện tại), +1 tháng/+1 năm theo lịch UTC (kẹp cuối tháng, 29/02).
-- Chặn ở điểm ghi: `sp_send_request_to_bakery`, `sp_create_quote`, `sp_revise_quote`, `sp_accept_quote` gọi `sp_guard_bakery_entitled` **sau khi giữ khóa**, với `v_now` lúc đó. Hết hạn → SIGNAL `BAKERY_SUBSCRIPTION_INACTIVE` (gửi yêu cầu: 409 cùng mã). Báo giá tạo trước khi hết hạn cũng không chọn được. `sp_withdraw_quote`, `sp_bakery_decide_order` không đổi: rút báo giá, xác nhận/từ chối đơn đã có vẫn chạy. Hết hạn không khóa user, không đổi hồ sơ, không hủy đơn. Procedure vẫn tự quản lý transaction.
+- Chặn ở điểm ghi: `sp_send_request_to_bakery`, `sp_create_quote`, `sp_revise_quote`, `sp_accept_quote` gọi `sp_guard_bakery_entitled` **sau khi giữ khóa**, với `v_now` lúc đó. Hết hạn → SIGNAL `BAKERY_SUBSCRIPTION_INACTIVE` (gửi yêu cầu: 409 cùng mã). Báo giá tạo trước khi hết hạn cũng không chọn được. `sp_withdraw_quote`, `sp_bakery_decide_order` không kiểm tra gói: rút báo giá, xác nhận/từ chối đơn đã có vẫn chạy (V006 đề xuất chỉ thêm kiểm tra giờ nhận/lý do, xem mục Đơn hàng). Hết hạn không khóa user, không đổi hồ sơ, không hủy đơn. Procedure vẫn tự quản lý transaction.
 - Catalog chưa đổi theo quyền gói (hiển thị sau hết hạn chưa chốt).
 
 | Endpoint | Ai | Ghi chú |

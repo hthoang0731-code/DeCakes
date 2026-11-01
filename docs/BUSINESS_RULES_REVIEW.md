@@ -34,7 +34,7 @@ Chọn mẫu hiện không phải mua trực tiếp với giá cố định: API
 | Báo giá | `submitted -> superseded` + phiên bản mới `submitted` | Tiệm sửa bằng procedure; nội dung phiên bản cũ bất biến |
 | Báo giá | `submitted -> withdrawn` | Tiệm rút; membership vẫn phải active, profile tiệm có thể không active |
 | Báo giá | `submitted -> accepted` | Khách chọn; các báo giá submitted khác của yêu cầu thành not_selected |
-| Đơn | `pending_confirmation -> confirmed/rejected_by_bakery` | Thành viên active của đúng tiệm; confirm cần tiệm active, reject không cần |
+| Đơn | `pending_confirmation -> confirmed/rejected_by_bakery` | Thành viên active của đúng tiệm; confirm cần tiệm active và chưa tới giờ nhận, reject không cần nhưng bắt buộc lý do (V006 đề xuất, xem [ORDERS](ORDERS.md)) |
 | Đơn | `confirmed -> ready -> picked_up` | Chưa có API/procedure; quyền chuyển và kiểm tra cạnh tranh cần triển khai |
 | Yêu cầu/đơn | Sang `cancelled` do khách hoặc tiệm hủy | Chưa có API; ai được hủy ở bước nào chưa chốt |
 
@@ -63,7 +63,7 @@ Hiện schema và guard dùng đúng một `system_role` cho mỗi user. Cho m�
 | Đăng ký tài khoản bakery, tạo tiệm + owner | Chưa có; đây là điều kiện còn thiếu để tự sử dụng toàn luồng bằng tài khoản mới |
 | Quản lý tiệm, mẫu bánh và ảnh | Chưa có API ghi; Catalog hiện chỉ đọc |
 | Quotes | Có procedure, chưa có mã API/service/store trong checkout lúc rà |
-| Chọn báo giá, Orders, xác nhận/từ chối đơn | Có procedure, chưa có mã API/service/store |
+| Chọn báo giá, Orders, xác nhận/từ chối đơn | Lúc rà: có procedure, chưa có mã. 02/11/2026: có API/service/store và migration V006 đề xuất (chỉ kiểm thử local), xem [ORDERS](ORDERS.md) |
 | Đánh dấu đã xem, từ chối yêu cầu | Có cột/trạng thái và quyền UPDATE, chưa có API |
 | Ready/picked_up/hủy | Có cột/trạng thái, chưa có API và bảng chuyển trạng thái được chốt |
 | Ảnh tham khảo/ảnh mẫu/ảnh thiết kế | Có media_assets, chưa có upload và storage được chọn |
@@ -82,9 +82,11 @@ Ví dụ: báo giá tạo lúc 09:00, hẹn nhận 10:00, hết hạn 12:00. SQL
 
 **Đã chốt ngày 01/11/2026:** khi tạo/sửa báo giá, API bắt buộc `now < validUntil <= estimatedPickupAt`. Chưa triển khai phần ghi ở checkpoint đọc báo giá. Kiểm tra lại giờ nhận tại điểm chọn đơn/procedure sau khi khóa vẫn là phần việc Orders cần thiết kế và duyệt riêng; quyết định này không cho phép tự sửa SQL hoặc chạy migration Aiven. Xem [QUOTES](QUOTES.md).
 
+**Đã duyệt và triển khai local ngày 02/11/2026:** khi chọn, giờ nhận phải còn ở tương lai theo giờ database sau mọi lần đọc có khóa; confirm bị chặn khi đã tới giờ nhận, reject vẫn được. Thực hiện bằng migration mới V006 (không sửa install/V003–V005), **chưa áp dụng lên Aiven**. Xem [ORDERS](ORDERS.md).
+
 ### BR-02 — Hạn xử lý đơn chờ xác nhận
 
-**Hiện có:** chưa có deadline xác nhận, job hết hạn hoặc kiểm tra thời gian nhận khi confirm. Đơn có thể chờ vô thời hạn và yêu cầu đã ở ordered.
+**Hiện có:** chưa có deadline xác nhận hoặc job hết hạn. Từ V006 (đề xuất, chỉ kiểm thử local) confirm bị chặn khi đã tới giờ nhận, nhưng đơn vẫn có thể ở pending_confirmation vô thời hạn cho tới khi tiệm từ chối; yêu cầu vẫn ở ordered.
 
 **Cần chốt:** khách có được hủy khi chờ quá lâu không; có cần deadline tự động không. Đề xuất MVP cho khách hủy khi còn pending_confirmation và tạm chưa có tự động hết hạn. Thao tác hủy phải tranh chấp an toàn với confirm/reject.
 

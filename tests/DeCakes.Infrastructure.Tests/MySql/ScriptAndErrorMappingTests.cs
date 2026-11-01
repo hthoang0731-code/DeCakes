@@ -1,6 +1,10 @@
 using System.Text.RegularExpressions;
 using DeCakes.Application.DesignRequests;
+using DeCakes.Application.Orders;
+using DeCakes.Application.Quotes;
 using DeCakes.Infrastructure.DesignRequests;
+using DeCakes.Infrastructure.Orders;
+using DeCakes.Infrastructure.Quotes;
 
 namespace DeCakes.Infrastructure.Tests.MySql;
 
@@ -117,6 +121,187 @@ public class ScriptAndErrorMappingTests
     public void Unknown_codes_are_not_mapped(string sqlState, string? message)
     {
         Assert.False(SendRequestProcedureErrors.TryMap(sqlState, message, out _));
+    }
+
+    [Theory]
+    [InlineData("sp_create_quote")]
+    [InlineData("sp_revise_quote")]
+    [InlineData("sp_withdraw_quote")]
+    public void Quote_allowlists_equal_the_signals_of_each_procedure_and_the_guards_it_calls(string procedure)
+    {
+        // Bản có hiệu lực: V005 tạo lại create/revise (thêm sp_guard_bakery_entitled); withdraw và các guard khác giữ install/02.
+        var install = File.ReadAllText(Path.Combine(RepoRoot(), "database", "install", "02_procedures.sql"));
+        var v005 = File.ReadAllText(Path.Combine(RepoRoot(), "database", "migrations", "V005__subscription_payments.sql"));
+        string Effective(string name) => v005.Contains($"-- ----- BLOCK: {name} -----", StringComparison.Ordinal) ? Block(v005, name) : Block(install, name);
+
+        var body = Effective(procedure);
+        var blocks = new[] { body }.Concat(Regex.Matches(body, @"CALL (sp_guard_[a-z_]+)\(").Select(m => Effective(m.Groups[1].Value)));
+        var codes = blocks.SelectMany(b => Regex.Matches(b, @"MESSAGE_TEXT = '([A-Z_]+)'").Select(m => m.Groups[1].Value)).ToHashSet();
+        var allowlist = procedure switch
+        {
+            "sp_create_quote" => QuoteProcedureErrors.Create,
+            "sp_revise_quote" => QuoteProcedureErrors.Revise,
+            _ => QuoteProcedureErrors.Withdraw,
+        };
+
+        Assert.Equal(codes.Order(), allowlist.Keys.Order());
+        Assert.Equal(procedure != "sp_withdraw_quote", codes.Contains("BAKERY_SUBSCRIPTION_INACTIVE"));
+    }
+
+    [Theory]
+    [InlineData("45000", "QUOTE_NOT_CURRENT", QuoteWriteOutcome.QuoteNotCurrent)]
+    [InlineData("45000", "NOT_BAKERY_MEMBER", QuoteWriteOutcome.BakeryNotFound)]
+    [InlineData("45000", "QUOTE_ALREADY_ACCEPTED", QuoteWriteOutcome.QuoteAlreadyAccepted)]
+    public void Known_withdraw_codes_map(string sqlState, string message, QuoteWriteOutcome expected)
+    {
+        Assert.True(QuoteProcedureErrors.TryMap(QuoteProcedureErrors.Withdraw, sqlState, message, out var outcome));
+        Assert.Equal(expected, outcome);
+    }
+
+    [Theory]
+    [InlineData("45000", "QUOTE_ALREADY_EXISTS")]          // mã của sp_create_quote, withdraw không thể trả
+    [InlineData("45000", "BAKERY_SUBSCRIPTION_INACTIVE")]  // rút không kiểm tra gói
+    [InlineData("45000", "QUOTE_EXPIRED")]                 // mã của sp_accept_quote
+    [InlineData("45000", "quote_not_current")]             // phân biệt hoa thường
+    [InlineData("23000", "QUOTE_NOT_CURRENT")]             // không phải SIGNAL nghiệp vụ
+    [InlineData("45000", null)]
+    public void Codes_outside_the_withdraw_allowlist_are_not_mapped(string sqlState, string? message)
+    {
+        Assert.False(QuoteProcedureErrors.TryMap(QuoteProcedureErrors.Withdraw, sqlState, message, out _));
+        if (message == "QUOTE_EXPIRED")
+        {
+            Assert.False(QuoteProcedureErrors.TryMap(QuoteProcedureErrors.Create, sqlState, message, out _));
+            Assert.False(QuoteProcedureErrors.TryMap(QuoteProcedureErrors.Revise, sqlState, message, out _));
+        }
+    }
+
+    [Fact]
+    public void Order_rules_migration_is_loadable_needs_no_grants_and_records_version_six_last()
+    {
+        var statements = SqlScriptSplitter.Split(SchemaScript.LoadSanitized(SchemaScript.OrderRulesMigrationFile)).Select(CodeOf).ToList();
+
+        Assert.Equal("CALL tmp_v006_precheck()", statements.Single(s => s.StartsWith("CALL ", StringComparison.Ordinal)));
+        Assert.Equal(["sp_accept_quote", "sp_bakery_decide_order"], statements
+            .Where(s => s.StartsWith("CREATE PROCEDURE sp_", StringComparison.Ordinal))
+            .Select(s => s["CREATE PROCEDURE ".Length..s.IndexOf('(')]));
+        Assert.StartsWith("INSERT INTO schema_migrations (version, description)\nVALUES (6,", statements[^1].ReplaceLineEndings("\n"));
+        Assert.DoesNotContain(statements, s => s.Contains("DELIMITER", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(statements, s => s.StartsWith("ALTER ", StringComparison.Ordinal) || s.StartsWith("CREATE TABLE", StringComparison.Ordinal));
+        Assert.False(File.Exists(Path.Combine(RepoRoot(), SchemaScript.OrderRulesMigrationFile.Replace(".sql", ".grants.sql", StringComparison.Ordinal))));
+        Assert.DoesNotContain(SchemaScript.GrantFiles, f => f.Contains("V006", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Order_rules_migration_only_adds_the_approved_checks_to_the_effective_procedures()
+    {
+        var install = File.ReadAllText(Path.Combine(RepoRoot(), "database", "install", "02_procedures.sql"));
+        var v005 = File.ReadAllText(Path.Combine(RepoRoot(), "database", "migrations", "V005__subscription_payments.sql"));
+        var v006 = File.ReadAllText(Path.Combine(RepoRoot(), SchemaScript.OrderRulesMigrationFile));
+
+        // Accept: mọi dòng mã của V005 (khóa, guard, gói, bản chốt INSERT) giữ nguyên thứ tự; chỉ thêm lần lấy giờ thứ hai và kiểm tra giờ nhận.
+        var accept = AddedCodeLines(CodeLines(Block(v005, "sp_accept_quote")), CodeLines(Block(v006, "sp_accept_quote")));
+        Assert.Equal(
+        [
+            "SET v_now = SYSDATE(3) - INTERVAL TIMESTAMPDIFF(MICROSECOND, UTC_TIMESTAMP(3), NOW(3)) MICROSECOND;",
+            "IF v_pickup_at <= v_now THEN",
+            "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'QUOTE_PICKUP_PASSED';",
+            "END IF;",
+        ], accept);
+        var acceptBody = Block(v006, "sp_accept_quote");
+        Assert.True(acceptBody.IndexOf("CALL sp_guard_bakery_entitled", StringComparison.Ordinal)
+                    < acceptBody.LastIndexOf("SET v_now", StringComparison.Ordinal));
+        Assert.True(acceptBody.LastIndexOf("SET v_now", StringComparison.Ordinal)
+                    < acceptBody.IndexOf("'QUOTE_EXPIRED'", StringComparison.Ordinal));
+
+        // Decide: giữ mọi dòng của install/02; dòng khóa orders chỉ đọc thêm agreed_pickup_at.
+        var original = CodeLines(Block(install, "sp_bakery_decide_order")).Select(line => line == "SELECT bakery_id, status INTO v_bakery_id, v_status"
+            ? "SELECT bakery_id, status, agreed_pickup_at INTO v_bakery_id, v_status, v_pickup_at" : line).ToList();
+        Assert.Equal(
+        [
+            "DECLARE v_pickup_at  DATETIME(3) DEFAULT NULL;",
+            "IF p_decision = 'reject' AND (p_reason IS NULL OR TRIM(p_reason) = '') THEN",
+            "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ORDER_REJECTION_REASON_REQUIRED';",
+            "END IF;",
+            "IF v_now >= v_pickup_at THEN",
+            "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ORDER_PICKUP_PASSED';",
+            "END IF;",
+        ], AddedCodeLines(original, CodeLines(Block(v006, "sp_bakery_decide_order"))));
+    }
+
+    [Theory]
+    [InlineData("sp_accept_quote")]
+    [InlineData("sp_bakery_decide_order")]
+    public void Order_allowlists_equal_the_signals_of_each_procedure_and_the_guards_it_calls(string procedure)
+    {
+        // Bản có hiệu lực: V006 cho accept/decide, V005 cho sp_guard_bakery_entitled, install/02 cho các guard khác.
+        var sources = new[]
+        {
+            File.ReadAllText(Path.Combine(RepoRoot(), SchemaScript.OrderRulesMigrationFile)),
+            File.ReadAllText(Path.Combine(RepoRoot(), "database", "migrations", "V005__subscription_payments.sql")),
+            File.ReadAllText(Path.Combine(RepoRoot(), "database", "install", "02_procedures.sql")),
+        };
+        string Effective(string name) => Block(sources.First(s => s.Contains($"-- ----- BLOCK: {name} -----", StringComparison.Ordinal)), name);
+
+        var body = Effective(procedure);
+        var blocks = new[] { body }.Concat(Regex.Matches(body, @"CALL (sp_guard_[a-z_]+)\(").Select(m => Effective(m.Groups[1].Value)));
+        var codes = blocks.SelectMany(b => Regex.Matches(b, @"MESSAGE_TEXT = '([A-Z_]+)'").Select(m => m.Groups[1].Value)).ToHashSet();
+        var allowlist = procedure == "sp_accept_quote" ? OrderProcedureErrors.Accept : OrderProcedureErrors.Decide;
+
+        Assert.Equal(codes.Order(), allowlist.Keys.Order());
+        Assert.Equal(procedure == "sp_accept_quote", codes.Contains("BAKERY_SUBSCRIPTION_INACTIVE"));
+    }
+
+    [Theory]
+    [InlineData("45000", "QUOTE_EXPIRED", OrderWriteOutcome.QuoteExpired)]
+    [InlineData("45000", "QUOTE_PICKUP_PASSED", OrderWriteOutcome.QuotePickupPassed)]
+    [InlineData("45000", "NOT_REQUEST_OWNER", OrderWriteOutcome.RequestNotFound)]
+    public void Known_accept_codes_map(string sqlState, string message, OrderWriteOutcome expected)
+    {
+        Assert.True(OrderProcedureErrors.TryMap(OrderProcedureErrors.Accept, sqlState, message, out var outcome));
+        Assert.Equal(expected, outcome);
+    }
+
+    [Theory]
+    [InlineData("45000", "ORDER_PICKUP_PASSED")]            // mã của sp_bakery_decide_order
+    [InlineData("45000", "ORDER_NOT_PENDING")]
+    [InlineData("45000", "MIGRATION_V006_ALREADY_APPLIED")] // mã của precheck migration
+    [InlineData("45000", "quote_expired")]                  // phân biệt hoa thường
+    [InlineData("23000", "QUOTE_EXPIRED")]                  // không phải SIGNAL nghiệp vụ
+    [InlineData("45000", null)]
+    public void Codes_outside_the_accept_allowlist_are_not_mapped(string sqlState, string? message)
+    {
+        Assert.False(OrderProcedureErrors.TryMap(OrderProcedureErrors.Accept, sqlState, message, out _));
+    }
+
+    [Theory]
+    [InlineData("45000", "QUOTE_EXPIRED")]                  // mã của sp_accept_quote
+    [InlineData("45000", "BAKERY_SUBSCRIPTION_INACTIVE")]   // quyết định đơn không kiểm tra gói
+    [InlineData("45000", "QUOTE_PICKUP_PASSED")]
+    [InlineData("45000", "order_not_pending")]
+    [InlineData("22001", "ORDER_NOT_PENDING")]
+    [InlineData("45000", null)]
+    public void Codes_outside_the_decide_allowlist_are_not_mapped(string sqlState, string? message)
+    {
+        Assert.False(OrderProcedureErrors.TryMap(OrderProcedureErrors.Decide, sqlState, message, out _));
+    }
+
+    // Dòng mã (bỏ comment, trim, bỏ dòng trống) của một block procedure.
+    private static List<string> CodeLines(string block) => block.ReplaceLineEndings("\n").Split('\n')
+        .Select(line => line.Trim()).Where(line => line.Length > 0 && !line.StartsWith("--", StringComparison.Ordinal)).ToList();
+
+    // Bản mới phải giữ mọi dòng của bản cũ theo đúng thứ tự; trả về các dòng được thêm.
+    private static List<string> AddedCodeLines(IReadOnlyList<string> original, IReadOnlyList<string> updated)
+    {
+        var added = new List<string>();
+        var index = 0;
+        foreach (var line in updated)
+        {
+            if (index < original.Count && line == original[index]) index++;
+            else added.Add(line);
+        }
+
+        Assert.True(index == original.Count, $"Dòng gốc bị đổi hoặc mất: '{(index < original.Count ? original[index] : "")}'");
+        return added;
     }
 
     // Phần mã của câu lệnh, bỏ các dòng comment đứng trước.

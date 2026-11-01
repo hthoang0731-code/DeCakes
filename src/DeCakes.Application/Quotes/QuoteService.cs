@@ -18,6 +18,15 @@ public interface IQuoteService
 
     Task<ListQuotesResult> ListForCustomerAsync(
         long customerId, long requestId, string? status, int? page, int? pageSize, CancellationToken cancellationToken);
+
+    Task<SaveQuoteResult> CreateAsync(
+        long actorUserId, long bakeryId, long requestId, QuoteInput input, CancellationToken cancellationToken);
+
+    Task<SaveQuoteResult> ReviseAsync(
+        long actorUserId, long bakeryId, long requestId, long quoteId, QuoteInput input, CancellationToken cancellationToken);
+
+    Task<SaveQuoteResult> WithdrawAsync(
+        long actorUserId, long bakeryId, long requestId, long quoteId, CancellationToken cancellationToken);
 }
 
 public abstract record ListQuotesResult
@@ -25,6 +34,16 @@ public abstract record ListQuotesResult
     public sealed record Ok(QuoteListResult Result) : ListQuotesResult;
 
     public sealed record ValidationFailed(IReadOnlyDictionary<string, string[]> Errors) : ListQuotesResult;
+}
+
+public abstract record SaveQuoteResult
+{
+    /// <summary>Phiên bản vừa tạo, phiên bản mới sau khi sửa, hoặc phiên bản vừa rút; đọc lại sau CALL.</summary>
+    public sealed record Saved(QuoteDto Quote) : SaveQuoteResult;
+
+    public sealed record ValidationFailed(IReadOnlyDictionary<string, string[]> Errors) : SaveQuoteResult;
+
+    public sealed record Rejected(QuoteWriteOutcome Reason) : SaveQuoteResult;
 }
 
 public sealed class QuoteService(IQuoteStore store, TimeProvider timeProvider) : IQuoteService
@@ -47,6 +66,44 @@ public sealed class QuoteService(IQuoteStore store, TimeProvider timeProvider) :
         long customerId, long requestId, string? status, int? page, int? pageSize, CancellationToken cancellationToken) =>
         ListAsync(status, page, pageSize, (filter, number, size) =>
             store.ListForCustomerAsync(customerId, requestId, filter, number, size, cancellationToken));
+
+    public Task<SaveQuoteResult> CreateAsync(
+        long actorUserId, long bakeryId, long requestId, QuoteInput input, CancellationToken cancellationToken) =>
+        SaveAsync(actorUserId, bakeryId, requestId, input, values =>
+            store.CreateAsync(actorUserId, bakeryId, requestId, values, cancellationToken), cancellationToken);
+
+    public Task<SaveQuoteResult> ReviseAsync(
+        long actorUserId, long bakeryId, long requestId, long quoteId, QuoteInput input, CancellationToken cancellationToken) =>
+        SaveAsync(actorUserId, bakeryId, requestId, input, values =>
+            store.ReviseAsync(actorUserId, bakeryId, requestId, quoteId, values, cancellationToken), cancellationToken);
+
+    public async Task<SaveQuoteResult> WithdrawAsync(
+        long actorUserId, long bakeryId, long requestId, long quoteId, CancellationToken cancellationToken) =>
+        await ReadBackAsync(actorUserId, bakeryId, requestId,
+            await store.WithdrawAsync(actorUserId, bakeryId, requestId, quoteId, cancellationToken), cancellationToken);
+
+    private async Task<SaveQuoteResult> SaveAsync(
+        long actorUserId, long bakeryId, long requestId, QuoteInput input, Func<QuoteValues, Task<QuoteWriteResult>> write,
+        CancellationToken cancellationToken)
+    {
+        var (values, errors) = QuoteValidator.Validate(input, timeProvider.GetUtcNow());
+        if (values is null) return new SaveQuoteResult.ValidationFailed(errors);
+
+        return await ReadBackAsync(actorUserId, bakeryId, requestId, await write(values), cancellationToken);
+    }
+
+    // Procedure không trả result set: đọc lại phiên bản trong cùng phạm vi tiệm/yêu cầu của actor.
+    private async Task<SaveQuoteResult> ReadBackAsync(
+        long actorUserId, long bakeryId, long requestId, QuoteWriteResult result, CancellationToken cancellationToken)
+    {
+        if (result.Outcome != QuoteWriteOutcome.Saved) return new SaveQuoteResult.Rejected(result.Outcome);
+
+        var id = result.QuoteId ?? throw new InvalidOperationException("Store không trả id báo giá đã ghi.");
+        var read = await GetForBakeryAsync(actorUserId, bakeryId, requestId, id, cancellationToken);
+        return read is { Outcome: QuoteReadOutcome.Found, Quote: { } quote }
+            ? new SaveQuoteResult.Saved(quote)
+            : throw new InvalidOperationException("Không đọc lại được báo giá vừa ghi.");
+    }
 
     private async Task<ListQuotesResult> ListAsync(
         string? status, int? page, int? pageSize, Func<string?, int, int, Task<QuoteListResult>> query)

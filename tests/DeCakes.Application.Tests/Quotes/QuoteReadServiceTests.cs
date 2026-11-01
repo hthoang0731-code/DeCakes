@@ -135,5 +135,8 @@ public class QuoteReadServiceTests
         { Capture(actorUserId, bakeryId, requestId, 0, cancellationToken); Filter = (status, page, pageSize); return Task.FromResult(List); }
         public Task<QuoteListResult> ListForCustomerAsync(long customerId, long requestId, string? status, int page, int pageSize, CancellationToken cancellationToken)
             => ListForBakeryAsync(customerId, 0, requestId, status, page, pageSize, cancellationToken);
+        public Task<QuoteWriteResult> CreateAsync(long actorUserId, long bakeryId, long requestId, QuoteValues values, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<QuoteWriteResult> ReviseAsync(long actorUserId, long bakeryId, long requestId, long quoteId, QuoteValues values, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<QuoteWriteResult> WithdrawAsync(long actorUserId, long bakeryId, long requestId, long quoteId, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }
