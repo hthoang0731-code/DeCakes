@@ -162,11 +162,11 @@ Từ P dòng 11-51 và cấu trúc từng procedure:
 - **Khóa**: `design_requests` rồi `quotes`.
 - **Lưu ý**: không kiểm tra trạng thái yêu cầu, không đổi `request_bakeries.status`. Sau khi rút, `request_bakeries.status` vẫn là `quoted` **[cần xác minh có phải ý định thiết kế không]**. Muốn báo giá lại thì gọi `sp_create_quote`.
 
-> **Bản có hiệu lực của mục 10–11.** V005 tạo lại `sp_accept_quote` (thêm `sp_guard_bakery_entitled`). Migration **đề xuất** [V006](migrations/V006__order_decision_time_rules.sql) tạo lại cả hai procedure, chỉ thêm các điểm sau; mọi phần khác giữ nguyên:
+> **Bản có hiệu lực của mục 10–11.** V005 tạo lại `sp_accept_quote` (thêm `sp_guard_bakery_entitled`). Migration [V006](migrations/V006__order_decision_time_rules.sql) tạo lại cả hai procedure, chỉ thêm các điểm sau; mọi phần khác giữ nguyên:
 > - accept lấy lại `v_now` sau guard gói (guard đọc `FOR SHARE`, có thể chờ khóa), dùng giá trị đó cho `QUOTE_EXPIRED` và cho mã mới `QUOTE_PICKUP_PASSED` (giờ nhận đã qua);
 > - decide: reject cần `p_reason` không rỗng sau TRIM (`ORDER_REJECTION_REASON_REQUIRED`), confirm bị chặn khi `v_now >= agreed_pickup_at` (`ORDER_PICKUP_PASSED`).
 >
-> V006 mới chỉ kiểm thử trên MySQL 8.4 disposable local, **chưa áp dụng lên Aiven**. Mô tả bên dưới là bản install/02. Xem [ORDERS](../docs/ORDERS.md).
+> **V006 đã áp dụng lên Aiven ngày 02/11/2026**; không chạy lại. Đã đối chiếu hai định nghĩa trên server với V006; sau đó [nghiệm thu ghi Orders trên Aiven](../docs/AIVEN_ORDERS_ACCEPTANCE_2026-11-02.md) qua API với email mô phỏng Resend đạt 83 kiểm tra. Mô tả bên dưới là bản install/02, cần đọc cùng bổ sung này. Xem [ORDERS](../docs/ORDERS.md) và [báo cáo triển khai](../docs/AIVEN_V006_DEPLOYMENT_2026-11-02.md).
 
 ## 10. `sp_accept_quote`
 

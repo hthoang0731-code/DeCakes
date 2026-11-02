@@ -2,7 +2,7 @@
 
 Ngày 02/11/2026, nhánh `feature/orders`. Gồm: khách chọn báo giá tạo đơn, đọc bản chốt, tiệm xác nhận hoặc từ chối. **Chưa có** ready, picked_up, hủy đơn, deadline tự động, thanh toán tiền bánh, chat, AI.
 
-> **Migration V006 mới chỉ được kiểm thử trên MySQL 8.4 disposable local. Chưa áp dụng lên Aiven.** Trên database chưa có V006 (Aiven hiện ở version 5), API đọc đơn vẫn chạy; accept và decision trả 503 `ORDER_WORKFLOW_NOT_READY` và không gọi procedure.
+> **V006 đã áp dụng lên Aiven ngày 02/11/2026**, database hiện ở version 6. Hai procedure khớp mã đã duyệt; dữ liệu nghiệp vụ giữ nguyên. Xem [báo cáo triển khai](AIVEN_V006_DEPLOYMENT_2026-11-02.md); không chạy lại V006. Trên database khác chưa có V006, accept và decision vẫn trả 503 `ORDER_WORKFLOW_NOT_READY`, còn API đọc đơn vẫn chạy. Đã nghiệm thu thao tác ghi Orders trên Aiven bằng email mô phỏng Resend: **58 request/83 kiểm tra đạt**, dữ liệu gốc giữ nguyên; xem [báo cáo nghiệm thu](AIVEN_ORDERS_ACCEPTANCE_2026-11-02.md). Chưa chứng minh thư tới Inbox thật.
 
 ## Quy tắc nghiệp vụ đã duyệt
 
@@ -137,6 +137,9 @@ Chỉ tạo lại `sp_accept_quote` (bản V005) và `sp_bakery_decide_order` (b
   - lỗi ngoài allowlist (lý do > 500 ký tự, SQLSTATE khác 45000) không ghi gì;
   - lọc/phân trang/thứ tự khi `created_at` trùng, offset lớn, GET không đổi dòng nào.
 - Chưa chạy đối chứng các ca chờ khóa với procedure V005 (chỉ suy luận rằng V005 sẽ cho qua).
-- **Chưa kiểm chứng HTTPS end-to-end với store thật và MySQL** cho Orders: kiểm thử API dùng store giả, store được kiểm chứng riêng trên MySQL.
+- **Bổ sung nghiệm thu HTTPS thật ngày 02/11/2026:** Kestrel HTTPS, Controllers/service/store thật và MySQL 8.4.13 disposable; 98 request API, **146 kiểm tra PASS, 0 FAIL**. Gồm accept (201 + Location), bản chốt, đọc ở hai phía, quyền/CSRF, thao tác lặp, confirm/reject, lý do Unicode, request cancelled và quote vẫn accepted, confirm sau giờ nhận bị chặn nhưng reject được, phân trang/lọc, và chặn ghi khi thiếu marker V006 trong khi đọc vẫn chạy. Chỉ email là fake; không gọi Resend/payOS hoặc ghi Aiven.
+- Hai tình huống biên HTTP được chuẩn bị bằng công cụ riêng của fixture: bỏ/khôi phục marker V006 (procedure vẫn V006), và đặt giờ nhận của đơn pending về quá khứ. Không coi đây là kiểm thử cài schema V005 thật hoặc bằng chứng snapshot không đổi khi sửa nguồn; các trường hợp đó có phạm vi kiểm chứng riêng ở trên.
+- Kiểm thử chạy lại trong lượt review: service Orders **33/33**, API Orders **47/47**, parser/allowlist **46/46**; build host và các project tham chiếu **0 cảnh báo, 0 lỗi**. Không chạy lại toàn bộ 226 ca Infrastructure MySQL; đã đối chiếu TRX của lượt trước. Báo cáo cục bộ: `TestResults/orders-http-review-20261102/HTTP_REVIEW.md` (Git bỏ qua).
+- Đã dọn host, MySQL/datadir/database/user tạm và file môi trường chứa mật khẩu tạm. API cổng 7215 đã mở lại với cấu hình gốc; health 200 và OpenAPI có đủ 7 route Orders. **Tại thời điểm kết thúc lượt review, V006 chưa áp dụng lên Aiven**; sau đó đã triển khai theo phạm vi riêng, xem báo cáo ở đầu tài liệu. Không có commit/push mới trong lượt review.
 
 Xem thêm [báo giá](QUOTES.md), [nghiệp vụ](BUSINESS_RULES_REVIEW.md), [schema](../database/SCHEMA.md), [procedure](../database/STORED_PROCEDURES.md), [kiểm thử](../tests/README.md).

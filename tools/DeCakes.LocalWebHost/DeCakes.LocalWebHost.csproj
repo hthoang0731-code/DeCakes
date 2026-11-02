@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/DeCakes.Api/DeCakes.Api.csproj" />
+    <ProjectReference Include="../../tests/DeCakes.Infrastructure.Tests/DeCakes.Infrastructure.Tests.csproj" />
+    <ProjectReference Include="../../tests/DeCakes.Api.Tests/DeCakes.Api.Tests.csproj" />
+  </ItemGroup>
+</Project>

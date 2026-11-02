@@ -2,6 +2,8 @@
 
 Backend cho website đặt bánh theo yêu cầu: khách gửi một yêu cầu đến nhiều tiệm, nhận báo giá, chọn một báo giá và chờ tiệm xác nhận đơn. C#/.NET 10, Clean Architecture tinh gọn.
 
+**Triển khai Aiven — 02/11/2026:** đã áp dụng V006, database ở version 6; hai procedure Orders khớp bản đã duyệt, 17 bảng/12 procedure, dữ liệu nghiệp vụ và quyền backend được đối chiếu giữ nguyên. Đã nghiệm thu luồng ghi Orders trên Aiven: 58 request/83 kiểm tra đạt, dùng địa chỉ email mô phỏng chính thức của Resend; chưa chứng minh thư tới Inbox thật. Xem [báo cáo nghiệm thu](docs/AIVEN_ORDERS_ACCEPTANCE_2026-11-02.md) và [báo cáo V006](docs/AIVEN_V006_DEPLOYMENT_2026-11-02.md). Không chạy lại migration đã áp dụng.
+
 **Triển khai Aiven — 31/10/2026:** đã áp dụng V003 → V004 → V005 và grants cho cả hai tài khoản backend. Database có 17 bảng, 12 procedure; dữ liệu cũ giữ nguyên. Đã tạo gói `basic` / **Cơ bản**, giá tháng/năm để NULL. Hai tiệm active cũ chưa có kỳ sử dụng nên bị chặn giao dịch mới. Email Resend chưa đủ cấu hình, payOS đang tắt; chưa nghiệm thu toàn bộ luồng ghi trên Aiven. Xem [báo cáo triển khai và giới hạn](docs/AIVEN_DEPLOYMENT_2026-10-31.md). Không chạy lại các migration đã áp dụng.
 
 **Admin thật đã xác minh:** tạo thành công ngày 31/10/2026 bằng mật khẩu nhập ẩn; đăng nhập, `/api/auth/me` và dashboard Admin đã chạy trên Aiven. Công cụ đăng xuất sau khi kiểm tra; người dùng đăng nhập lại bằng tài khoản vừa tạo để sử dụng.
@@ -358,7 +360,7 @@ Chi tiết quyền, validation, bảng lỗi và kiểm chứng: [docs/QUOTES.md
 
 ## Đơn hàng (Orders)
 
-Cần [migration V006](database/migrations/V006__order_decision_time_rules.sql). **V006 mới chỉ được kiểm thử trên MySQL 8.4 disposable local, chưa áp dụng lên Aiven.** Khi database chưa có version 6, accept và decision trả 503 `ORDER_WORKFLOW_NOT_READY` và không gọi procedure; các GET đơn vẫn chạy trên V005.
+Cần [migration V006](database/migrations/V006__order_decision_time_rules.sql). **V006 đã áp dụng lên Aiven ngày 02/11/2026** (xem [báo cáo](docs/AIVEN_V006_DEPLOYMENT_2026-11-02.md)); không chạy lại. Khi database chưa có version 6, accept và decision trả 503 `ORDER_WORKFLOW_NOT_READY` và không gọi procedure; các GET đơn vẫn chạy trên V005.
 
 - Khách: `POST /api/design-requests/{requestId}/quotes/{quoteId}/accept` (email đã xác minh, CSRF; 201 + `Location: /api/orders/{id}`, body là bản chốt); `GET /api/orders`, `GET /api/orders/{orderId}`, `GET /api/design-requests/{requestId}/order`.
 - Tiệm (owner/staff active của đúng tiệm): `GET /api/bakery-workspace/bakeries/{bakeryId}/orders[/{orderId}]`; `POST .../orders/{orderId}/decision` với `{ decision: "confirm" | "reject", reason }` (reason bắt buộc khi reject, tối đa 500 ký tự; confirm không nhận reason). 200 với đơn đọc lại.
